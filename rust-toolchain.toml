@@ -1,0 +1,9 @@
+# Pinned exactly: an upgrade is a deliberate commit that passes the tests, never
+# a side effect of somebody running `rustup update`. The manifest says whether
+# the pin has fallen behind:
+#   curl -s https://static.rust-lang.org/dist/channel-rust-stable.toml | grep -m1 -A2 '^\[pkg.rust\]'
+# `scripts/check.sh` prints that comparison on every run.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

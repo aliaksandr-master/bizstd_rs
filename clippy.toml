@@ -1,0 +1,5 @@
+# Thresholds only. The deny list lives in the `[lints]` table of Cargo.toml so
+# that it travels with the package instead of with the checkout.
+avoid-breaking-exported-api = false
+too-many-arguments-threshold = 8
+type-complexity-threshold = 500

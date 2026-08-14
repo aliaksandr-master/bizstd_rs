@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# recorded benchmark baselines, written by scripts/check.sh --full
+/benchmarks/
+
+.DS_Store
+*.token
