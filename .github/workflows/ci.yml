@@ -1,0 +1,54 @@
+# The verification loop on every push and pull request, and a release rehearsal
+# on every version tag. It calls the same script a developer calls locally, so a
+# green run means what it says.
+#
+# Nothing here publishes. The release is cut from a workstation with
+# `make publish`, by a person who can see what it is about to do; a pipeline
+# that publishes by itself will one day publish a tag somebody pushed to see
+# what would happen.
+
+name: check
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # release.sh compares the tag against HEAD, which needs the tags and
+          # the history behind them rather than the single commit a default
+          # checkout fetches.
+          fetch-depth: 0
+
+      # The pin in rust-toolchain.toml is what rustup installs and uses when
+      # cargo runs; the action only makes sure rustup is there. The `toolchain`
+      # step of check.sh prints the version actually in use, so the claim is
+      # observable rather than assumed.
+      - uses: dtolnay/rust-toolchain@stable
+
+      # The floor the manifest promises. Installed explicitly because
+      # check.sh skips the check when the toolchain is missing, and a check
+      # that silently skips in CI is not a check.
+      - name: install the minimum supported toolchain
+        run: rustup toolchain install "$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)" --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: verification loop
+        run: scripts/check.sh
+
+      # Everything the real release does except the upload. It runs on a tag so
+      # that a broken release is found before anyone reaches for the button.
+      - name: release rehearsal
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: scripts/release.sh --dry-run
