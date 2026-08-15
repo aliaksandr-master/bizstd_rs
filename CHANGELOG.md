@@ -5,6 +5,43 @@ the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-08-15
+
+Everything below came out of using 1.0.0 against real files. Two of the changes
+alter behaviour rather than adding to it, which is what makes this a major
+version rather than a minor one.
+
+### Fixed
+
+- **`split_records` returns the body of a length-prefixed record, without its
+  two-byte length prefix.** It used to hand back the prefix as part of the
+  record, which shifted every field read by two: a schema declaring a field at
+  offset 0 read the length instead, and timestamps came out centuries wrong.
+  Callers that compensated by adding 2 to every offset must remove that
+  compensation. Fixed-size layouts are unaffected.
+
+### Added
+
+- Frame checksums. `Frame` carries `hash`, the XXH64 of the compressed bytes,
+  and `_frames` records it as an optional fourth field; frames are also
+  compressed with zstd's own frame checksum enabled. `validate` reports a
+  mismatch, and `rebuild_headers` fills the field in for a file written before
+  it existed. An index without the field round-trips unchanged, so old files
+  stay byte-identical until something rewrites them.
+- `xxh64`, the hash the checksums use.
+- `Container::read_frame_at`, reading a frame by its position in the list.
+  Frame ids repeat legitimately — a caller partitioning by hour closes a
+  midnight spill under hour 0 after hour 23 — so a sweep meaning "every frame"
+  must go by position. `validate` now does.
+
+### Changed
+
+- **`Frame` gained a public field**, so struct literals naming every field need
+  `hash` — `Frame { id, offset, len, hash: 0 }` for an unrecorded one.
+- Frames written from now on carry a checksum inside the compressed stream, so
+  any decoder verifies them. Files written by 1.0.0 remain readable.
+
+
 ## [1.0.0] - 2026-08-14
 
 The first published version. Container format version 1.
@@ -41,5 +78,6 @@ The first published version. Container format version 1.
 - No locking. One writer per file at a time, enforced by the caller; two
   writers on the same path corrupt it silently.
 
-[Unreleased]: https://github.com/aliaksandr-master/bizstd_rs/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/aliaksandr-master/bizstd_rs/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/aliaksandr-master/bizstd_rs/releases/tag/v2.0.0
 [1.0.0]: https://github.com/aliaksandr-master/bizstd_rs/releases/tag/v1.0.0

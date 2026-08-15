@@ -599,26 +599,40 @@ pub struct Frame {
     pub offset: u64,
     /// Compressed length in bytes.
     pub len: u64,
+    /// XXH64 of the compressed bytes, `0` when the file predates checksums.
+    /// Zero is a possible-but-astronomically-unlikely real hash; treating it
+    /// as "unrecorded" trades that corner for a byte-cheap upgrade path on
+    /// files written before the field existed.
+    pub hash: u64,
 }
 
-/// Renders `_frames`: `id,offset,len;...`.
+/// Renders `_frames`: `id,offset,len,xxh64;...` (hash in hex; the fourth
+/// field is omitted while unrecorded, so an index written before checksums
+/// existed round-trips byte-for-byte).
 #[must_use]
 pub fn render_frames(frames: &[Frame]) -> String {
     frames
         .iter()
-        .map(|frame| format!("{},{},{}", frame.id, frame.offset, frame.len))
+        .map(|frame| {
+            if frame.hash == 0 {
+                format!("{},{},{}", frame.id, frame.offset, frame.len)
+            } else {
+                format!("{},{},{},{:016x}", frame.id, frame.offset, frame.len, frame.hash)
+            }
+        })
         .collect::<Vec<_>>()
         .join(";")
 }
 
-/// Parses `_frames`.
+/// Parses `_frames`. The fourth field, the frame checksum, is optional:
+/// files written before it existed carry triples.
 ///
 /// # Errors
 /// Returns a message on a malformed triple.
 pub fn parse_frames(text: &str) -> Result<Vec<Frame>> {
     let mut frames = Vec::new();
     for token in text.split(';').filter(|token| !token.is_empty()) {
-        let mut parts = token.splitn(3, ',');
+        let mut parts = token.splitn(4, ',');
         let id: u64 = parts
             .next()
             .unwrap_or_default()
@@ -634,9 +648,103 @@ pub fn parse_frames(text: &str) -> Result<Vec<Frame>> {
             .unwrap_or_default()
             .parse()
             .map_err(|error| malformed(format!("bad frame {token:?}: {error}")))?;
-        frames.push(Frame { id, offset, len });
+        let hash = match parts.next() {
+            None | Some("") => 0,
+            Some(hex) => u64::from_str_radix(hex, 16).map_err(|error| malformed(format!("bad frame {token:?}: {error}")))?,
+        };
+        frames.push(Frame { id, offset, len, hash });
     }
     Ok(frames)
+}
+
+/// XXH64 of `data` with seed 0 — the per-frame checksum.
+///
+/// Written out rather than pulled from a dependency: it is forty lines, and
+/// the alternative is a second dependency in a crate whose selling point is
+/// having one. Constants and steps follow the xxHash specification, and the
+/// test vectors pin the implementation to it.
+#[must_use]
+pub fn xxh64(data: &[u8]) -> u64 {
+    const P1: u64 = 0x9E37_79B1_85EB_CA87;
+    const P2: u64 = 0xC2B2_AE3D_27D4_EB4F;
+    const P3: u64 = 0x1656_67B1_9E37_79F9;
+    const P4: u64 = 0x85EB_CA77_C2B2_AE63;
+    const P5: u64 = 0x27D4_EB2F_1656_67C5;
+
+    let read_u64 = |chunk: &[u8]| -> u64 { chunk.try_into().map_or(0, u64::from_le_bytes) };
+    let round = |accumulator: u64, lane: u64| -> u64 {
+        accumulator
+            .wrapping_add(lane.wrapping_mul(P2))
+            .rotate_left(31)
+            .wrapping_mul(P1)
+    };
+
+    let mut remainder = data;
+    let mut hash = if data.len() >= 32 {
+        let mut v1 = P1.wrapping_add(P2);
+        let mut v2 = P2;
+        let mut v3 = 0u64;
+        let mut v4 = 0u64.wrapping_sub(P1);
+        while remainder.len() >= 32 {
+            let (block, rest) = remainder.split_at(32);
+            v1 = round(v1, read_u64(block.get(0..8).unwrap_or_default()));
+            v2 = round(v2, read_u64(block.get(8..16).unwrap_or_default()));
+            v3 = round(v3, read_u64(block.get(16..24).unwrap_or_default()));
+            v4 = round(v4, read_u64(block.get(24..32).unwrap_or_default()));
+            remainder = rest;
+        }
+        let mut merged = v1
+            .rotate_left(1)
+            .wrapping_add(v2.rotate_left(7))
+            .wrapping_add(v3.rotate_left(12))
+            .wrapping_add(v4.rotate_left(18));
+        for lane in [v1, v2, v3, v4] {
+            merged = (merged ^ round(0, lane)).wrapping_mul(P1).wrapping_add(P4);
+        }
+        merged
+    } else {
+        P5
+    };
+    hash = hash.wrapping_add(data.len() as u64);
+
+    while remainder.len() >= 8 {
+        let (chunk, rest) = remainder.split_at(8);
+        hash = (hash ^ round(0, read_u64(chunk)))
+            .rotate_left(27)
+            .wrapping_mul(P1)
+            .wrapping_add(P4);
+        remainder = rest;
+    }
+    if remainder.len() >= 4 {
+        let (chunk, rest) = remainder.split_at(4);
+        let lane = u64::from(chunk.try_into().map_or(0, u32::from_le_bytes));
+        hash = (hash ^ lane.wrapping_mul(P1))
+            .rotate_left(23)
+            .wrapping_mul(P2)
+            .wrapping_add(P3);
+        remainder = rest;
+    }
+    for byte in remainder {
+        hash = (hash ^ u64::from(*byte).wrapping_mul(P5))
+            .rotate_left(11)
+            .wrapping_mul(P1);
+    }
+
+    hash ^= hash >> 33;
+    hash = hash.wrapping_mul(P2);
+    hash ^= hash >> 29;
+    hash = hash.wrapping_mul(P3);
+    hash ^= hash >> 32;
+    hash
+}
+
+/// Compresses one frame with the zstd frame checksum enabled: four bytes of
+/// XXH64 inside the frame, verified by every decoder that reads it.
+fn compress_frame(raw: &[u8], level: i32) -> Result<Vec<u8>> {
+    let mut encoder = zstd::stream::Encoder::new(Vec::new(), level).map_err(Error::from)?;
+    encoder.include_checksum(true).map_err(Error::from)?;
+    encoder.write_all(raw).map_err(Error::from)?;
+    encoder.finish().map_err(Error::from)
 }
 
 /// Splits raw bytes into records; the second value is the torn leftover.
@@ -662,7 +770,10 @@ pub fn split_records(bytes: &[u8], layout: RecordLayout) -> (Vec<&[u8]>, usize) 
             {
                 let body_start = position.saturating_add(2);
                 let body_end = body_start.saturating_add(prefix as usize);
-                let Some(record) = bytes.get(position..body_end) else {
+                // The BODY, without its length prefix: a record's fields sit
+                // at the schema's offsets, and a slice that still carried the
+                // two prefix bytes shifted every field read by two.
+                let Some(record) = bytes.get(body_start..body_end) else {
                     break;
                 };
                 records.push(record);
@@ -997,7 +1108,7 @@ impl Container {
             None
         };
 
-        let compressed = zstd::stream::encode_all(raw.as_slice(), level).map_err(Error::from)?;
+        let compressed = compress_frame(&raw, level)?;
 
         // Everything below is assembled on copies. A frame pushed onto
         // `self.frames` before the zone is known to render would move
@@ -1008,6 +1119,7 @@ impl Container {
             id: frame_id,
             offset: tail_start.saturating_sub(self.data_start),
             len: compressed.len() as u64,
+            hash: xxh64(&compressed),
         };
         let mut frames = self.frames.clone();
         frames.push(frame);
@@ -1085,6 +1197,28 @@ impl Container {
             .find(|frame| frame.id == frame_id)
             .copied()
             .ok_or_else(|| usage(format!("no frame {frame_id}")))?;
+        self.read_frame_body(frame)
+    }
+
+    /// Decompresses the frame at a POSITION in the frame list.
+    ///
+    /// Frame ids repeat legitimately — a caller that partitions by hour closes
+    /// a spill under hour 0 after hour 23 — so a sweep meaning "every frame"
+    /// must go by position. [`Container::read_frame`] stays for callers that
+    /// mean "the one with this id".
+    ///
+    /// # Errors
+    /// Returns an error on a bad index or a decode failure.
+    pub fn read_frame_at(&mut self, index: usize) -> Result<Vec<u8>> {
+        let frame = self
+            .frames
+            .get(index)
+            .copied()
+            .ok_or_else(|| usage(format!("no frame at position {index}")))?;
+        self.read_frame_body(frame)
+    }
+
+    fn read_frame_body(&mut self, frame: Frame) -> Result<Vec<u8>> {
         check_frames_fit(std::slice::from_ref(&frame), self.data_start, self.file_len)?;
         let mut compressed = vec![0u8; to_usize(frame.len)?];
         self.file
@@ -1387,10 +1521,40 @@ pub fn validate(path: &Path, mut check: Option<&mut dyn FnMut(&[u8]) -> Option<S
     }
 
     let mut frame_records_total: u64 = 0;
-    let frame_ids: Vec<u64> = container.frames.iter().map(|frame| frame.id).collect();
-    for frame_id in frame_ids {
+    // Positionally, never by id: ids repeat legitimately when a caller
+    // partitions by hour and a spill closes under hour 0 after hour 23, and an
+    // id-keyed sweep would read the first twin twice and never see the second.
+    let frame_count = container.frames.len();
+    for index in 0..frame_count {
+        let frame = container
+            .frames
+            .get(index)
+            .copied()
+            .unwrap_or(Frame { id: 0, offset: 0, len: 0, hash: 0 });
+        let frame_id = frame.id;
         report.frames = report.frames.saturating_add(1);
-        match container.read_frame(frame_id) {
+        if frame.hash != 0 {
+            match read_at(
+                &mut container.file,
+                container.data_start.saturating_add(frame.offset),
+                to_usize(frame.len)?,
+            ) {
+                Ok(bytes) => {
+                    let actual = xxh64(&bytes);
+                    if actual != frame.hash {
+                        problem(
+                            &mut report,
+                            format!(
+                                "frame {frame_id}: checksum mismatch, _frames says {:016x}, the bytes hash to {actual:016x}",
+                                frame.hash
+                            ),
+                        );
+                    }
+                }
+                Err(error) => problem(&mut report, format!("frame {frame_id}: {error}")),
+            }
+        }
+        match container.read_frame_at(index) {
             Ok(raw) => {
                 let (records, leftover) = split_records(&raw, container.schema.layout);
                 if leftover > 0 {
@@ -1481,6 +1645,10 @@ pub fn rebuild_headers(path: &Path, fix: bool) -> Result<RebuildReport> {
         // memory, so a maintenance pass that does not is a maintenance pass
         // nobody can run on the files that need it.
         let (consumed, raw) = decode_frame_at(&mut container.file, absolute, data_len.saturating_sub(position as u64))?;
+        // Recomputing the hash here is what upgrades a file written before the
+        // field existed: `rebuild_headers(path, true)` rewrites `_frames` with
+        // the fourth field filled in.
+        let hash = xxh64(&read_at(&mut container.file, absolute, consumed)?);
         let (frame_records, leftover) = split_records(&raw, container.schema.layout);
         if leftover > 0 {
             return Err(malformed(format!(
@@ -1497,7 +1665,7 @@ pub fn rebuild_headers(path: &Path, fix: bool) -> Result<RebuildReport> {
             },
             |frame| frame.id,
         );
-        actual_frames.push(Frame { id, offset: position as u64, len: consumed as u64 });
+        actual_frames.push(Frame { id, offset: position as u64, len: consumed as u64, hash });
         position = position.saturating_add(consumed);
     }
     // The raw tail is deliberately left out of the counters: `_records`
@@ -1685,9 +1853,14 @@ pub fn repack_with_header_area(path: &Path, level: i32, header_area: u32) -> Res
         let frame_list = container.frames.clone();
         for frame in frame_list {
             let raw = container.read_frame(frame.id)?;
-            let compressed = zstd::stream::encode_all(raw.as_slice(), level).map_err(Error::from)?;
+            let compressed = compress_frame(&raw, level)?;
             out.write_all(&compressed).map_err(Error::from)?;
-            new_frames.push(Frame { id: frame.id, offset, len: compressed.len() as u64 });
+            new_frames.push(Frame {
+                id: frame.id,
+                offset,
+                len: compressed.len() as u64,
+                hash: xxh64(&compressed),
+            });
             offset = offset.saturating_add(compressed.len() as u64);
         }
         let frames_written = new_frames.len();
@@ -1881,7 +2054,10 @@ mod tests {
         let compressed = zstd::stream::encode_all(tail.as_slice(), HOT_LEVEL).unwrap();
         let mut headers = reader.headers().clone();
         headers
-            .set("_frames", &render_frames(&[Frame { id: 0, offset: 0, len: compressed.len() as u64 }]))
+            .set(
+                "_frames",
+                &render_frames(&[Frame { id: 0, offset: 0, len: compressed.len() as u64, hash: 0 }]),
+            )
             .unwrap();
         headers.set("_records", "10").unwrap();
         headers.set("_bytes_raw", "250").unwrap();
@@ -1905,7 +2081,10 @@ mod tests {
         let path = root.join("book.bizstd");
         let schema = Schema {
             name: "book@1".to_owned(),
-            fields: vec![FieldSpec { name: "n_levels".to_owned(), ty: "u16".to_owned(), offset: 2 }],
+            // Offset 0, where the schema says the first field is. A splitter
+            // that hands back the length prefix along with the body shifts
+            // every field read by two, which is the defect this pins.
+            fields: vec![FieldSpec { name: "n_levels".to_owned(), ty: "u16".to_owned(), offset: 0 }],
             layout: RecordLayout::Prefixed,
         };
         let mut file = Container::create(&path, &schema, "s", "w", 0, DEFAULT_HEADER_AREA, &[]).unwrap();
@@ -1919,7 +2098,12 @@ mod tests {
         let (records, leftover) = split_records(&raw, RecordLayout::Prefixed);
         assert_eq!(leftover, 0);
         assert_eq!(records.len(), 2);
-        assert_eq!(records.first().unwrap().get(2..), Some([1u8, 2, 3].as_slice()));
+        assert_eq!(*records.first().unwrap(), [1u8, 2, 3].as_slice(), "the body, prefix stripped");
+        assert_eq!(*records.get(1).unwrap(), [4u8, 5, 6, 7, 8].as_slice());
+        // The field the schema declares reads at its declared offset.
+        let first = records.first().unwrap();
+        let n_levels = u16::from_le_bytes(first.get(0..2).unwrap().try_into().unwrap());
+        assert_eq!(n_levels, u16::from_le_bytes([1, 2]));
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -2151,7 +2335,10 @@ mod tests {
         let compressed = zstd::stream::encode_all(raw.as_slice(), HOT_LEVEL).unwrap();
         let mut headers = staged.headers().clone();
         headers
-            .set("_frames", &render_frames(&[Frame { id: 0, offset: 0, len: compressed.len() as u64 }]))
+            .set(
+                "_frames",
+                &render_frames(&[Frame { id: 0, offset: 0, len: compressed.len() as u64, hash: 0 }]),
+            )
             .unwrap();
         headers.set("_records", "40").unwrap();
         headers.set("_bytes_raw", &(40u64 * 25).to_string()).unwrap();
@@ -2164,6 +2351,118 @@ mod tests {
         assert!(report.problems.is_empty(), "{:?}", report.problems);
         assert_eq!(report.frames, 1);
         assert_eq!(report.records, 40);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn xxh64_matches_the_reference_vectors() {
+        // From the xxHash specification, seed 0.
+        assert_eq!(xxh64(b""), 0xEF46_DB37_51D8_E999);
+        assert_eq!(xxh64(b"abc"), 0x44BC_2CF5_AD77_0999);
+        // Longer than 32 bytes, so the four-lane path runs.
+        assert_eq!(xxh64(b"Nobody inspects the spammish repetition"), 0xFBCE_A83C_8A37_8BF1);
+    }
+
+    #[test]
+    fn a_frame_index_written_before_checksums_round_trips_unchanged() {
+        let old = "0,0,100;1,100,200";
+        let frames = parse_frames(old).unwrap();
+        assert_eq!(frames.len(), 2);
+        assert!(frames.iter().all(|frame| frame.hash == 0), "unrecorded stays unrecorded");
+        assert_eq!(render_frames(&frames), old, "an untouched old index must not change shape");
+
+        let hashed = "0,0,100,00000000deadbeef";
+        let parsed = parse_frames(hashed).unwrap();
+        assert_eq!(parsed.first().unwrap().hash, 0xdead_beef);
+        assert_eq!(render_frames(&parsed), hashed);
+    }
+
+    #[test]
+    fn a_corrupted_frame_is_caught_by_its_checksum() {
+        let root = scratch_dir("checksum");
+        let path = root.join("day.bizstd");
+        let mut file = Container::create(&path, &sample_schema(), "s", "w", 0, DEFAULT_HEADER_AREA, &[]).unwrap();
+        for index in 0..100u64 {
+            file.append_record(&record(index, 1.0, 1.0, 0)).unwrap();
+        }
+        file.seal(0, HOT_LEVEL).unwrap();
+        let frame = *file.frames().first().unwrap();
+        assert_ne!(frame.hash, 0, "a frame written now records its hash");
+        drop(file);
+        assert!(validate(&path, None).unwrap().problems.is_empty());
+
+        // Flip one byte inside the compressed frame.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let target = to_usize(PREAMBLE_BYTES as u64 + u64::from(DEFAULT_HEADER_AREA) + frame.offset + 8).unwrap();
+        *bytes.get_mut(target).unwrap() ^= 0xFF;
+        std::fs::write(&path, &bytes).unwrap();
+
+        let report = validate(&path, None).unwrap();
+        assert!(
+            report.problems.iter().any(|text| text.contains("checksum mismatch")),
+            "{:?}",
+            report.problems
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn repeated_frame_ids_are_swept_by_position() {
+        let root = scratch_dir("twins");
+        let path = root.join("day.bizstd");
+        let mut file = Container::create(&path, &sample_schema(), "s", "w", 0, DEFAULT_HEADER_AREA, &[]).unwrap();
+        // Hour 23, then a midnight spill closed under hour 0: two frames, and
+        // one of the ids appears twice across the pair below.
+        for index in 0..10u64 {
+            file.append_record(&record(index, 1.0, 1.0, 0)).unwrap();
+        }
+        file.close_frame(0, HOT_LEVEL).unwrap();
+        for index in 10..30u64 {
+            file.append_record(&record(index, 1.0, 1.0, 0)).unwrap();
+        }
+        file.seal(0, HOT_LEVEL).unwrap();
+        drop(file);
+
+        let mut back = Container::open_read(&path).unwrap();
+        assert_eq!(back.frames().len(), 2, "two frames, both with id 0");
+        let first = back.read_frame_at(0).unwrap();
+        let second = back.read_frame_at(1).unwrap();
+        assert_eq!(split_records(&first, RecordLayout::Fixed(25)).0.len(), 10);
+        assert_eq!(split_records(&second, RecordLayout::Fixed(25)).0.len(), 20);
+        assert!(back.read_frame_at(2).is_err());
+        drop(back);
+
+        // The id-keyed read cannot tell them apart; validate must not rely on it.
+        let report = validate(&path, None).unwrap();
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert_eq!(report.frames, 2);
+        assert_eq!(report.records, 30, "each twin counted once");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn rebuilding_fills_in_a_missing_checksum() {
+        let root = scratch_dir("upgrade");
+        let path = root.join("day.bizstd");
+        let mut file = Container::create(&path, &sample_schema(), "s", "w", 0, DEFAULT_HEADER_AREA, &[]).unwrap();
+        for index in 0..20u64 {
+            file.append_record(&record(index, 1.0, 1.0, 0)).unwrap();
+        }
+        file.seal(0, HOT_LEVEL).unwrap();
+        let frame = *file.frames().first().unwrap();
+        drop(file);
+
+        // Rewrite the index the way a pre-checksum writer left it: a triple.
+        let mut back = Container::open_append(&path).unwrap();
+        back.headers
+            .set("_frames", &format!("{},{},{}", frame.id, frame.offset, frame.len))
+            .unwrap();
+        back.flush_headers().unwrap();
+        drop(back);
+        let report = rebuild_headers(&path, true).unwrap();
+        assert!(report.fixed, "the missing checksum is a difference worth fixing");
+        let restored = Container::open_read(&path).unwrap();
+        assert_eq!(restored.frames().first().unwrap().hash, frame.hash, "recomputed from the bytes");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

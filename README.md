@@ -13,7 +13,7 @@ One dependency (`zstd`), no configuration, no runtime, `#![forbid(unsafe_code)]`
 
 ```toml
 [dependencies]
-bizstd = "1.0"
+bizstd = "2.0"
 ```
 
 ## Why it exists
@@ -135,6 +135,15 @@ fn main() -> bizstd::Result<()> {
 }
 ```
 
+## Integrity
+
+Every frame is compressed with zstd's frame checksum enabled, so any decoder
+catches a damaged frame on the way out. On top of that `_frames` records the
+XXH64 of each frame's compressed bytes, which lets `validate` find damage
+without decompressing and tell you which frame it is. Both are additive: a file
+written before checksums existed has no fourth field in its index, reads
+exactly as before, and gains one when `rebuild_headers` next runs over it.
+
 ## Compression levels
 
 Two are named because two are used: `HOT_LEVEL` (3) closes a frame on the write
@@ -179,6 +188,11 @@ started are a stable answer.
 | `rebuild_headers` | derives the system headers from the data section and, if asked, writes them back |
 | `repack` | rewrites the frames at another compression level, next to the original, then swaps atomically |
 | `peek_headers` | preamble and headers only, without touching the data |
+
+Sweeping every frame goes through `read_frame_at(index)` rather than
+`read_frame(id)`: ids are the caller's, and callers repeat them — partition by
+hour and a midnight spill closes under hour 0 after hour 23. `read_frame(id)`
+stays for when you mean one particular frame.
 
 Every one of them treats the data section as the truth and the headers as a
 cache, which is what makes a header zone damaged by a half-written update

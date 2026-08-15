@@ -1,6 +1,6 @@
 [package]
 name = "bizstd"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2024"
 # The floor the code actually needs, not the compiler it happens to be
 # developed on. 1.85 is the first release with the 2024 edition this crate is
