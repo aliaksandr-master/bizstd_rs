@@ -25,3 +25,12 @@ __pycache__/
 /python/**/*.so
 /python/**/*.pyd
 /python/**/*.dylib
+
+# node
+/nodejs/node_modules/
+/nodejs/target/
+/nodejs/npm/
+/nodejs/artifacts/
+/nodejs/*.node
+/nodejs/index.js
+/nodejs/index.d.ts

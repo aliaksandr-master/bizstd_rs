@@ -1,0 +1,54 @@
+{
+  "name": "bizstd",
+  "version": "2.0.0",
+  "description": "An append-only container for records that arrive continuously and are read back in bulk.",
+  "keywords": [
+    "zstd",
+    "compression",
+    "append-only",
+    "container",
+    "file-format"
+  ],
+  "license": "MIT",
+  "author": "Aliaksandr Master <alxe.master@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aliaksandr-master/bizstd_rs.git"
+  },
+  "homepage": "https://github.com/aliaksandr-master/bizstd_rs",
+  "type": "commonjs",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib/",
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "napi": {
+    "binaryName": "bizstd",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "node --test '__test__/**/*.test.mjs'",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0",
+    "@types/node": "^26.2.0",
+    "typescript": "^5.6.0"
+  }
+}

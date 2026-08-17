@@ -30,11 +30,11 @@ including the cases where something else wins.
 | Language | Package | Install |
 |---|---|---|
 | Rust | [`bizstd`](https://crates.io/crates/bizstd) | `cargo add bizstd` |
-| Python | `bizstd` (pure) + `bizstd-binary` (compiled) | `pip install bizstd` |
-| Node.js | `bizstd` | `npm install bizstd` |
+| Python | [`bizstd`](https://pypi.org/project/bizstd/) (pure) + [`bizstd-binary`](https://pypi.org/project/bizstd-binary/) (compiled) | `pip install bizstd` |
+| Node.js | [`bizstd`](https://www.npmjs.com/package/bizstd) | `npm install bizstd` |
 
-The Python and Node packages are being built; only the Rust crate is published
-so far. This table is the plan, and it says so rather than pretending.
+Rust and Python are published. The Node package is built and tested and has not
+been published yet; the table says so rather than pretending.
 
 **Every package in this repository shares a major and minor version.** Only the
 patch part may differ, so a binding can ship a fix without dragging the others
