@@ -656,7 +656,7 @@ fn inspect(path: &Path) -> i32 {
             return exit::UNUSABLE;
         }
     };
-    let file_size = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+    let file_size = std::fs::metadata(path).map_or(0, |meta| meta.len());
     let schema = container.schema().clone();
     let frames = container.frames().to_vec();
 
@@ -690,10 +690,7 @@ fn inspect(path: &Path) -> i32 {
         .parse()
         .unwrap_or(0);
     let stored: u64 = frames.iter().map(|frame| frame.len).sum();
-    let tail = container
-        .read_tail()
-        .map(|tail| tail.len() as u64)
-        .unwrap_or(0);
+    let tail = container.read_tail().map_or(0, |tail| tail.len() as u64);
     let tail_records = match container.read_tail() {
         Ok(bytes) => split_records(&bytes, schema.layout).0.len() as u64,
         Err(_error) => 0,

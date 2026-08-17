@@ -1,0 +1,18 @@
+# Pinned exactly, for every Rust directory in this repository: cargo looks for
+# this file upwards from wherever it is run, so one file at the root governs the
+# crate, the command line, the benchmarks and both bindings.
+#
+# It lives here rather than in rust/ because it did live there, and the command
+# line then built against whatever stable happened to be installed - which
+# meant CI failed on lints the pinned toolchain does not have. A pin that
+# covers some of the code is a pin that lies about the rest.
+#
+# An upgrade is a deliberate commit that passes the tests, never a side effect
+# of somebody running `rustup update`. The manifest says whether
+# the pin has fallen behind:
+#   curl -s https://static.rust-lang.org/dist/channel-rust-stable.toml | grep -m1 -A2 '^\[pkg.rust\]'
+# `scripts/check.sh` prints that comparison on every run.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

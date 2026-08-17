@@ -20,7 +20,7 @@ step "toolchain"
 rustc --version
 # The pin is the source of truth; the channel manifest says whether it has
 # fallen behind. Never fatal: a release day is a bad day to be blocked by curl.
-pinned=$(grep -m1 '^channel' rust-toolchain.toml | cut -d'"' -f2)
+pinned=$(grep -m1 '^channel' ../rust-toolchain.toml | cut -d'"' -f2)
 latest=$(curl -fsS --max-time 10 https://static.rust-lang.org/dist/channel-rust-stable.toml 2>/dev/null \
          | grep -m1 -A2 '^\[pkg.rust\]' | grep '^version' | cut -d'"' -f2 | cut -d' ' -f1 || echo "")
 if [ -n "$latest" ] && [ "$pinned" != "$latest" ]; then

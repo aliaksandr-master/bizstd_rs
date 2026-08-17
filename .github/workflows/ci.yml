@@ -48,7 +48,7 @@ jobs:
           # checkout fetches.
           fetch-depth: 0
 
-      # The pin in rust/rust-toolchain.toml is what rustup installs and uses
+      # The pin in rust-toolchain.toml at the root is what rustup installs and uses
       # when cargo runs; the action only makes sure rustup is there.
       - uses: dtolnay/rust-toolchain@stable
 

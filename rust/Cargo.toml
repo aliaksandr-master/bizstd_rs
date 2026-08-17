@@ -17,7 +17,7 @@ documentation = "https://docs.rs/bizstd"
 readme = "README.md"
 keywords = ["zstd", "compression", "append-only", "container", "file-format"]
 categories = ["compression", "filesystem", "encoding"]
-exclude = [".github/", "scripts/", "Makefile", "clippy.toml", "deny.toml", "rust-toolchain.toml"]
+exclude = [".github/", "scripts/", "Makefile", "clippy.toml", "deny.toml", "check.sh"]
 
 [dependencies]
 # The only dependency, and deliberately so: everything else the container needs
