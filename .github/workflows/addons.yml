@@ -31,10 +31,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `cross` marks the targets this runner cannot link natively. napi
+          # ships prepared sysroots for exactly these, which is cheaper and far
+          # more predictable than assembling a cross toolchain by hand.
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
-          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu }
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
-          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, cross: true }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, cross: true }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, cross: true }
+          # The macOS runner is arm64; the other architecture is a normal
+          # cross-compile that the linker there already handles.
           - { os: macos-latest, target: x86_64-apple-darwin }
           - { os: macos-latest, target: aarch64-apple-darwin }
           - { os: windows-latest, target: x86_64-pc-windows-msvc }
@@ -53,16 +58,9 @@ jobs:
       - name: install dependencies
         run: npm install
 
-      # napi-rs knows how to reach each target: a linker for the cross builds,
-      # the right container for musl. Naming the target is the whole
-      # configuration.
       - name: build the addon
-        uses: napi-rs/cli-action@v1
-        continue-on-error: false
-        with:
-          working-directory: nodejs
-          target: ${{ matrix.target }}
-          build-args: '--release --platform'
+        shell: bash
+        run: npx napi build --platform --release --target ${{ matrix.target }} ${{ matrix.cross && '--use-napi-cross' || '' }}
 
       - name: what was built
         shell: bash
