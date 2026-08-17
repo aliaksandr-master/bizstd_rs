@@ -1,0 +1,47 @@
+[package]
+name = "bizstd-cli"
+version = "2.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Command-line tool for bizstd containers: compact, rebuild, verify, fix, and dump to JSON."
+repository = "https://github.com/aliaksandr-master/bizstd_rs"
+documentation = "https://github.com/aliaksandr-master/bizstd_rs/tree/main/cli"
+readme = "README.md"
+keywords = ["zstd", "compression", "container", "file-format", "cli"]
+categories = ["command-line-utilities", "compression", "filesystem"]
+
+[[bin]]
+name = "bizstd"
+path = "src/main.rs"
+
+[dependencies]
+bizstd = { path = "../rust", version = "2.1" }
+
+[dev-dependencies]
+# The tests build a file to run the commands against, which needs the library
+# they are checking the command line on top of.
+bizstd = { path = "../rust", version = "2.1" }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+# The deny list applies to the program. Tests report a failure by panicking,
+# which is what `expect` is for there, so they opt out explicitly rather than
+# by being quietly excluded.
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+missing_errors_doc = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true

@@ -18,7 +18,7 @@ SHELL := /usr/bin/env bash
 
 # Directories that carry a Makefile of their own, in the order a release needs:
 # the Rust crate is what the others bind to, so it goes first.
-LANGUAGES := rust python nodejs
+LANGUAGES := rust cli python nodejs
 PRESENT := $(foreach dir,$(LANGUAGES),$(if $(wildcard $(dir)/Makefile),$(dir),))
 
 SERIES := $(shell tr -d '[:space:]' < VERSION)

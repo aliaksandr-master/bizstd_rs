@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bizstd"
-version = "2.0.0"
+version = "2.1.0"
 description = "An append-only container for records that arrive continuously and are read back in bulk."
 readme = "README.md"
 license = "MIT"
@@ -21,7 +21,7 @@ classifiers = [
 ]
 # The compiled half, pinned to the same major and minor. Only the patch may
 # differ between them, which is what lets a fix ship on one side alone.
-dependencies = ["bizstd-binary>=2.0,<2.1"]
+dependencies = ["bizstd-binary>=2.1,<2.2"]
 
 [project.urls]
 Homepage = "https://github.com/aliaksandr-master/bizstd_rs"

@@ -5,6 +5,39 @@ the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-08-18
+
+### Added
+
+- **Storing frames with no compression at all.** `NO_COMPRESSION` (level 0)
+  writes the bytes that were appended, unchanged. A frame is recognised on the
+  way back by whether it begins with the zstd magic, so one file may hold both
+  kinds and a reader needs no flag to tell them apart.
+
+  One thing is given up and is worth knowing before choosing it:
+  `rebuild_headers` finds frame boundaries by walking zstd frames, which
+  announce their own length. Raw frames do not, so a file written this way
+  depends on `_frames` for its boundaries and cannot have them reconstructed
+  from the data if that header is lost.
+- `read_field` and `FieldValue`, decoding one field of one record according to
+  the schema the file carries. A record too short for the field it declares
+  returns `None` rather than a zero, which is what a file that outlived its
+  schema looks like.
+- **`bizstd-cli`, a command-line tool**, installed with
+  `cargo install bizstd-cli`. Seven commands: `inspect`, `rebuild`, `verify`,
+  `fix`, `try-json`, `try-csv` and `meta-json`. The converting commands write
+  nothing but their format to standard output, `inspect` is the one written to
+  be read rather than piped, and `verify` answers through its exit code — 0
+  sound, 1 problems found, 2 unreadable.
+
+### Changed
+
+- `repack` sets the preamble's compressed flag from the level it wrote, instead
+  of carrying over the flag of the file it read. A file rewritten without
+  compression no longer claims otherwise.
+- `_compression` now says `none` for a file whose frames are stored plainly.
+
+
 ## [2.0.0] - 2026-08-15
 
 Everything below came out of using 1.0.0 against real files. Two of the changes
@@ -78,6 +111,7 @@ The first published version. Container format version 1.
 - No locking. One writer per file at a time, enforced by the caller; two
   writers on the same path corrupt it silently.
 
-[Unreleased]: https://github.com/aliaksandr-master/bizstd_rs/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/aliaksandr-master/bizstd_rs/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/aliaksandr-master/bizstd_rs/releases/tag/v2.1.0
 [2.0.0]: https://github.com/aliaksandr-master/bizstd_rs/releases/tag/v2.0.0
 [1.0.0]: https://github.com/aliaksandr-master/bizstd_rs/releases/tag/v1.0.0

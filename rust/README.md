@@ -18,7 +18,7 @@ One dependency (`zstd`), no configuration, no runtime, `#![forbid(unsafe_code)]`
 
 ```toml
 [dependencies]
-bizstd = "2.0"
+bizstd = "2.1"
 ```
 
 ## Why it exists
