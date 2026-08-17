@@ -1,0 +1,21 @@
+# Stable options only: the nightly channel is not part of this project in any
+# form, which puts error_on_line_overflow and error_on_unformatted out of reach.
+# rustfmt will silently leave long string literals, macro bodies and some
+# comments alone. That gap is accepted knowingly.
+max_width = 160
+
+# Widths are set explicitly rather than derived from max_width. Left to itself,
+# a 160-column limit yields fn_call_width = 96 and chain_width = 96, and a
+# 96-character chain on one line makes every diff touching it unreadable.
+use_small_heuristics = "Off"
+fn_call_width = 90
+attr_fn_like_width = 90
+struct_lit_width = 60
+struct_variant_width = 40
+array_width = 90
+chain_width = 70
+single_line_if_else_max_width = 60
+single_line_let_else_max_width = 100
+
+use_field_init_shorthand = true
+edition = "2024"

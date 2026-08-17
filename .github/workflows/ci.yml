@@ -1,8 +1,8 @@
-# The verification loop on every push and pull request, and a release rehearsal
-# on every version tag. It calls the same script a developer calls locally, so a
-# green run means what it says.
+# One job per language, plus the check that they all claim the same version.
+# Each job runs the same script a developer runs locally, so a green run means
+# what it says.
 #
-# Nothing here publishes. The release is cut from a workstation with
+# Nothing here publishes. A release is cut from a workstation with
 # `make publish`, by a person who can see what it is about to do; a pipeline
 # that publishes by itself will one day publish a tag somebody pushed to see
 # what would happen.
@@ -20,8 +20,26 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
+  # Cheap, and it fails for a reason no compiler would catch: two packages
+  # claiming to be different versions of the same thing.
+  versions:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/versions.sh
+
+  rust:
+    # Every platform the crate claims to work on, checked rather than assumed.
+    # A pure-std crate over zstd has no business being platform-specific, which
+    # is exactly the kind of belief that turns out to be wrong on Windows.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: rust
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,25 +48,29 @@ jobs:
           # checkout fetches.
           fetch-depth: 0
 
-      # The pin in rust-toolchain.toml is what rustup installs and uses when
-      # cargo runs; the action only makes sure rustup is there. The `toolchain`
-      # step of check.sh prints the version actually in use, so the claim is
-      # observable rather than assumed.
+      # The pin in rust/rust-toolchain.toml is what rustup installs and uses
+      # when cargo runs; the action only makes sure rustup is there.
       - uses: dtolnay/rust-toolchain@stable
 
-      # The floor the manifest promises. Installed explicitly because
-      # check.sh skips the check when the toolchain is missing, and a check
-      # that silently skips in CI is not a check.
+      # The floor the manifest promises. Installed explicitly because check.sh
+      # skips that check when the toolchain is missing, and a check that
+      # silently skips in CI is not a check.
       - name: install the minimum supported toolchain
+        shell: bash
         run: rustup toolchain install "$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)" --profile minimal
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
 
       - name: verification loop
-        run: scripts/check.sh
+        shell: bash
+        run: ./check.sh
 
       # Everything the real release does except the upload. It runs on a tag so
       # that a broken release is found before anyone reaches for the button.
       - name: release rehearsal
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.os == 'ubuntu-latest'
+        shell: bash
+        working-directory: .
         run: scripts/release.sh --dry-run

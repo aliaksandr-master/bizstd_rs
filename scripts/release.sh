@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# release.sh — publish the version that Cargo.toml already names.
+# release.sh — publish the version the manifests already name.
+#
+# Every language package in this repository is released together on one
+# major.minor; scripts/versions.sh is what makes that true.
 #
 #   scripts/release.sh --dry-run   print the plan, rehearse the upload, send nothing
 #   scripts/release.sh             do it
 #
-# The version is never passed in on the command line. It lives in Cargo.toml,
+# The version is never passed in on the command line. It lives in the manifests,
 # it is reviewed like any other change, and the tag has to agree with it — a
 # release invoked with a version typed at the prompt is a release nobody
 # reviewed.
@@ -25,8 +28,8 @@ esac
 step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 die() { printf '\033[31m%s\033[0m\n' "$1" >&2; exit 1; }
 
-version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-[ -n "$version" ] || die "no version in Cargo.toml"
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' rust/Cargo.toml | head -1)
+[ -n "$version" ] || die "no version in rust/Cargo.toml"
 tag="v$version"
 branch=$(git rev-parse --abbrev-ref HEAD)
 
@@ -72,13 +75,16 @@ fi
 
 printf 'every guard passed\n'
 
+step "versions"
+scripts/versions.sh
+
 step "verification"
-scripts/check.sh
+make dev
 
 step "rehearsal"
 # --dry-run assembles and uploads nothing, but it does everything else the real
 # publish does, including refusing on a manifest the registry would reject.
-cargo publish --dry-run
+(cd rust && cargo publish --dry-run)
 
 if [ "$DRY_RUN" = 1 ]; then
   printf '\n\033[32mdry run finished — %s was not published\033[0m\n' "$version"
@@ -89,7 +95,7 @@ step "publish"
 [ -n "${CARGO_REGISTRY_TOKEN:-}" ] || [ -f "${CARGO_HOME:-$HOME/.cargo}/credentials.toml" ] \
   || die "no registry credentials: export CARGO_REGISTRY_TOKEN or run 'cargo login'"
 
-cargo publish
+(cd rust && cargo publish)
 
 printf '\n\033[32mbizstd %s published\033[0m\n' "$version"
-printf 'next: bump the version in Cargo.toml and open the CHANGELOG section for the one after it\n'
+printf 'next: bump VERSION and every manifest together, and open the CHANGELOG section for what comes after\n'

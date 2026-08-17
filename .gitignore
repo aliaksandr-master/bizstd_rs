@@ -1,9 +1,19 @@
-/target
+# build output, per language
+/rust/target/
+/benchmarks/target/
+/python/**/target/
+/python/**/dist/
+/python/**/*.egg-info/
+/python/**/.venv/
+/nodejs/**/node_modules/
+/nodejs/**/*.node
+
 **/*.rs.bk
 *.pdb
+__pycache__/
 
-# recorded benchmark baselines, written by scripts/check.sh --full
-/benchmarks/
+# recorded benchmark data and baselines
+/benchmarks/data/
 
 .DS_Store
 *.token

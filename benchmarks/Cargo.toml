@@ -1,0 +1,35 @@
+[package]
+name = "bizstd-benchmarks"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+description = "Measurements behind the claims in the README. Not part of any published package."
+
+[dependencies]
+bizstd = { path = "../rust" }
+
+# The codecs being compared. They are here and nowhere else: the library itself
+# depends on zstd alone, and the point of this directory is to show what that
+# choice costs against the alternatives.
+zstd = "0.13"
+flate2 = "1.0"
+lz4_flex = "0.11"
+brotli = "8.0"
+xz2 = "0.1"
+
+# The container formats being compared.
+arrow = { version = "56.0", default-features = false, features = ["ipc"] }
+parquet = { version = "56.0", default-features = false, features = ["arrow", "zstd", "snap"] }
+
+serde_json = "1.0"
+bytes = "1.10"
+
+[[bin]]
+name = "bizstd-bench"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
