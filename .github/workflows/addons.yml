@@ -60,6 +60,14 @@ jobs:
       - name: install dependencies
         run: npm install
 
+      # The musl targets link through zig. cargo-zigbuild installs itself and
+      # then looks for a zig it does not bring, which is a confusing way to
+      # fail: the error names a missing binary rather than a missing step.
+      - name: install zig for the musl targets
+        if: contains(matrix.target, 'musl')
+        shell: bash
+        run: pip install ziglang
+
       - name: build the addon
         shell: bash
         run: npx napi build --platform --release --target ${{ matrix.target }} ${{ matrix.flags }}
