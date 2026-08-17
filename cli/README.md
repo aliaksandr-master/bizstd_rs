@@ -9,12 +9,23 @@ Installs a `bizstd` binary for working with container files.
 ## Commands
 
 ```
-bizstd rebuild <file> [--level N] [--header-area N]
-bizstd verify <file>
-bizstd fix <file>
+bizstd inspect  <file>
+bizstd rebuild  <file> [--level N] [--header-area N]
+bizstd verify   <file>
+bizstd fix      <file>
 bizstd try-json <file> [--limit N]
+bizstd try-csv  <file> [--limit N] [--no-header]
 bizstd meta-json <file>
 ```
+
+### inspect
+
+Describes a file to a person: the preamble, the schema with its field offsets
+and types, the counters, the compression ratio, a table of frames with their
+checksums, every header split into the container's and yours, and the first few
+records decoded.
+
+It is the one command written to be read rather than piped.
 
 ### rebuild
 
@@ -53,10 +64,11 @@ verifies. It repairs a file whose counters or frame list disagree with its
 bytes — and says so plainly when the headers were repaired and the data was
 not, rather than reporting success.
 
-### try-json and meta-json
+### try-json, try-csv and meta-json
 
 ```bash
 bizstd try-json day.bizstd | jq 'select(.value > 100)'
+bizstd try-csv  day.bizstd > day.csv
 bizstd meta-json day.bizstd | jq '.headers._schema'
 ```
 
@@ -64,9 +76,15 @@ bizstd meta-json day.bizstd | jq '.headers._schema'
 banner — anything worth saying goes to standard error. A tool that has to be
 told not to corrupt its own output is a tool nobody pipes twice.
 
-`try-json` prints one object per line, with the field names and types the file's
-own schema declares. `meta-json` prints one object with the preamble, every
-header and the frame index.
+`try-json` prints one object per line and `try-csv` one row per record, both
+with the field names and types the file's own schema declares. `--no-header`
+drops the CSV header row; `--limit N` stops early and counts records, not lines.
+`meta-json` prints one object with the preamble, every header and the frame
+index.
+
+A CSV cell carrying a comma, a quote or a newline is quoted; a field the record
+is too short to hold comes out empty rather than as a zero, because those are
+different things.
 
 Integers that a JSON number cannot carry exactly — anything past 2^53, which
 includes every nanosecond timestamp — are printed as strings. A reader that

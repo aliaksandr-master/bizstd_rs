@@ -1,23 +1,25 @@
 //! `bizstd` — the command line for container files.
 //!
-//! Five commands, and the split between them is about what they do to a file
+//! Seven commands, and the split between them is about what they do to a file
 //! rather than about how they are implemented:
 //!
 //! - `rebuild` rewrites it,
 //! - `verify` and `fix` check and repair it,
-//! - `try-json` and `meta-json` read it and print JSON.
+//! - `inspect` describes it to a person,
+//! - `try-json`, `try-csv` and `meta-json` turn it into something else.
 //!
-//! **The two JSON commands write nothing but JSON to standard output.** No
-//! progress, no summary, no banner. Anything worth saying goes to standard
-//! error, so `bizstd try-json file | jq` works without a flag saying "and
-//! please be quiet" — a tool that needs to be told not to corrupt its own
-//! output is a tool nobody pipes twice.
+//! **The converting commands write nothing but their format to standard
+//! output.** No progress, no summary, no banner. Anything worth saying goes to
+//! standard error, so `bizstd try-json file | jq` works without a flag saying
+//! "and please be quiet" — a tool that needs to be told not to corrupt its own
+//! output is a tool nobody pipes twice. `inspect` is the opposite and says so
+//! by writing for a person, not for a pipe.
 //!
 //! Exit codes carry the answer for the commands that have one: `0` sound, `1`
 //! problems found, `2` the file could not be read at all. That is what makes
 //! `verify` usable from a script without parsing its prose.
 //!
-//! Arguments are parsed by hand. There are five commands and a handful of
+//! Arguments are parsed by hand. There are seven commands and a handful of
 //! options; a parser dependency would be larger than the program and would put
 //! a version-resolution problem between a user and `cargo install`.
 
@@ -59,9 +61,18 @@ COMMANDS
       file whose counters or frame list disagree with its bytes; cannot repair
       the bytes themselves.
 
+  inspect <file>
+      Describe the file to a person: the preamble, the schema, the counters,
+      every header, and a table of frames with what each one holds. Written to
+      be read, not piped.
+
   try-json <file> [--limit N]
       Every record as JSON, one object per line, decoded by the file's own
       schema. Only JSON reaches standard output.
+
+  try-csv <file> [--limit N] [--no-header]
+      Every record as CSV, one row per record, with the schema's field names as
+      the header row. Only CSV reaches standard output.
 
   meta-json <file>
       The headers and the frame index as one JSON object. Only JSON reaches
@@ -71,6 +82,7 @@ OPTIONS
   --level N        zstd level. 0 stores the bytes with no compression at all.
   --header-area N  size of the header zone, in bytes, when rewriting.
   --limit N        stop after N records.
+  --no-header      omit the header row from try-csv.
   -h, --help       this text.
   -V, --version    the version.
 ";
@@ -119,8 +131,16 @@ fn run() -> i32 {
         },
         "verify" => verify(&path),
         "fix" => fix(&path),
+        "inspect" => inspect(&path),
         "try-json" => match option_usize(options, "--limit") {
             Ok(limit) => try_json(&path, limit),
+            Err(text) => {
+                fail(&text);
+                exit::UNUSABLE
+            }
+        },
+        "try-csv" => match option_usize(options, "--limit") {
+            Ok(limit) => try_csv(&path, limit, options.iter().any(|o| o == "--no-header")),
             Err(text) => {
                 fail(&text);
                 exit::UNUSABLE
@@ -432,6 +452,304 @@ fn try_json(path: &Path, limit: Option<usize>) -> i32 {
 
     let _ignored = out.flush();
     exit::OK
+}
+
+/// Walks the records, calling `emit` for each, until the limit is reached.
+///
+/// Both converting commands need the same walk and differ only in what they
+/// write, so the walk is written once. Frames go by position, and the tail
+/// comes last because that is the order the file holds them in.
+fn each_record(
+    container: &mut Container,
+    limit: Option<usize>,
+    mut emit: impl FnMut(&[u8]) -> std::io::Result<()>,
+) -> i32 {
+    let layout = container.schema().layout;
+    let mut written = 0usize;
+    let frames = container.frames().len();
+
+    for index in 0..frames {
+        let raw = match container.read_frame_at(index) {
+            Ok(raw) => raw,
+            Err(error) => {
+                fail(&error.to_string());
+                return exit::UNUSABLE;
+            }
+        };
+        let (records, _leftover) = split_records(&raw, layout);
+        for record in records {
+            if limit.is_some_and(|stop| written >= stop) {
+                return exit::OK;
+            }
+            if emit(record).is_err() {
+                // A closed pipe is what `| head` looks like from here, and it
+                // is not an error worth a message or a non-zero exit.
+                return exit::OK;
+            }
+            written = written.saturating_add(1);
+        }
+    }
+
+    match container.read_tail() {
+        Ok(tail) => {
+            let (records, _leftover) = split_records(&tail, layout);
+            for record in records {
+                if limit.is_some_and(|stop| written >= stop) {
+                    break;
+                }
+                if emit(record).is_err() {
+                    return exit::OK;
+                }
+                written = written.saturating_add(1);
+            }
+            exit::OK
+        }
+        Err(error) => {
+            fail(&error.to_string());
+            exit::UNUSABLE
+        }
+    }
+}
+
+/// One field as a CSV cell, quoted only when it has to be.
+///
+/// A value that carries a comma, a quote or a newline and is written plainly
+/// turns one row into two, and the reader on the other end has no way to know.
+fn csv_cell(text: &str) -> String {
+    if text.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    } else {
+        text.to_owned()
+    }
+}
+
+fn try_csv(path: &Path, limit: Option<usize>, no_header: bool) -> i32 {
+    let mut container = match Container::open_read(path) {
+        Ok(container) => container,
+        Err(error) => {
+            fail(&error.to_string());
+            return exit::UNUSABLE;
+        }
+    };
+    let schema = container.schema().clone();
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+
+    if !no_header {
+        let header: Vec<String> = schema
+            .fields
+            .iter()
+            .map(|field| csv_cell(&field.name))
+            .collect();
+        if writeln!(out, "{}", header.join(",")).is_err() {
+            return exit::OK;
+        }
+    }
+
+    let code = each_record(&mut container, limit, |record| {
+        let cells: Vec<String> = schema
+            .fields
+            .iter()
+            .map(|field| match read_field(record, field) {
+                // An empty cell rather than a zero: a record too short for the
+                // field its schema declares is missing it, and CSV has a way
+                // of saying that.
+                None => String::new(),
+                Some(value) => csv_cell(&value.to_string()),
+            })
+            .collect();
+        writeln!(out, "{}", cells.join(","))
+    });
+    let _ignored = out.flush();
+    code
+}
+
+/// A ratio as a person reads it, or a dash when there is nothing to compare.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a ratio is read by a person, not multiplied by anything"
+)]
+fn ratio(raw: u64, stored: u64) -> String {
+    if stored == 0 || raw == 0 {
+        return "—".to_owned();
+    }
+    format!("{:.2}x", raw as f64 / stored as f64)
+}
+
+/// The schema, one field per line, in declaration order.
+fn write_schema(out: &mut String, schema: &bizstd::Schema) {
+    let layout = match schema.layout {
+        bizstd::RecordLayout::Fixed(size) => format!("fixed, {size} B per record"),
+        bizstd::RecordLayout::Prefixed => "length-prefixed".to_owned(),
+    };
+    let _ignored = writeln!(out, "\nschema  {}  ({layout})", schema.name);
+    for field in &schema.fields {
+        let _ignored = writeln!(
+            out,
+            "  {:>4}  {:<10} {}",
+            field.offset, field.ty, field.name
+        );
+    }
+}
+
+/// The frame index as a table, checksums included: that is the column worth
+/// having in front of you when a file is suspected of being damaged.
+fn write_frames(out: &mut String, frames: &[bizstd::Frame]) {
+    if frames.is_empty() {
+        let _ignored = writeln!(out, "\nno closed frames yet");
+        return;
+    }
+    let _ignored = writeln!(out, "\nframes");
+    let _ignored = writeln!(out, "     #     id       offset         len   checksum");
+    for (index, frame) in frames.iter().enumerate() {
+        let _ignored = writeln!(
+            out,
+            "  {index:>4}  {:>5}  {:>11}  {:>10}   {:016x}",
+            frame.id, frame.offset, frame.len, frame.hash
+        );
+    }
+}
+
+/// The headers, the container's apart from the caller's.
+///
+/// Showing them together would blur the one distinction that matters here:
+/// what the format put in the file, and what you did.
+fn write_headers(out: &mut String, headers: &bizstd::Headers) {
+    let (system, application): (Vec<_>, Vec<_>) = headers
+        .pairs()
+        .iter()
+        .partition(|(key, _value)| key.starts_with('_'));
+
+    let _ignored = writeln!(out, "\nsystem headers");
+    for (key, value) in system {
+        // The frame index and the preview are long by design; a terminal full
+        // of one header hides the thirteen others.
+        let shown = match value.char_indices().nth(67) {
+            Some((cut, _character)) => format!("{}…", value.get(..cut).unwrap_or_default()),
+            None => value.clone(),
+        };
+        let _ignored = writeln!(out, "  {key:<20} {shown}");
+    }
+
+    if application.is_empty() {
+        let _ignored = writeln!(out, "\nno application headers");
+        return;
+    }
+    let _ignored = writeln!(out, "\napplication headers");
+    for (key, value) in application {
+        let _ignored = writeln!(out, "  {key:<20} {value}");
+    }
+}
+
+fn inspect(path: &Path) -> i32 {
+    let mut container = match Container::open_read(path) {
+        Ok(container) => container,
+        Err(error) => {
+            fail(&error.to_string());
+            return exit::UNUSABLE;
+        }
+    };
+    let (preamble, headers) = match bizstd::peek_headers(path) {
+        Ok(pair) => pair,
+        Err(error) => {
+            fail(&error.to_string());
+            return exit::UNUSABLE;
+        }
+    };
+    let file_size = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+    let schema = container.schema().clone();
+    let frames = container.frames().to_vec();
+
+    let mut out = String::new();
+    let _ignored = writeln!(out, "{}", path.display());
+    let _ignored = writeln!(out, "  size          {}", human(file_size));
+    let _ignored = writeln!(
+        out,
+        "  format        version {}, header zone {} B, flags {:#04b}",
+        preamble.version, preamble.header_area, preamble.flags
+    );
+    let _ignored = writeln!(
+        out,
+        "  compression   {} (level {})",
+        headers.get("_compression").unwrap_or("?"),
+        headers.get("_compression_level").unwrap_or("?"),
+    );
+    let _ignored = writeln!(
+        out,
+        "  sealed        {}",
+        headers.get("_sealed").unwrap_or("?")
+    );
+
+    write_schema(&mut out, &schema);
+
+    // --- what is in it ------------------------------------------------------
+    let records: u64 = headers.get("_records").unwrap_or("0").parse().unwrap_or(0);
+    let bytes_raw: u64 = headers
+        .get("_bytes_raw")
+        .unwrap_or("0")
+        .parse()
+        .unwrap_or(0);
+    let stored: u64 = frames.iter().map(|frame| frame.len).sum();
+    let tail = container
+        .read_tail()
+        .map(|tail| tail.len() as u64)
+        .unwrap_or(0);
+    let tail_records = match container.read_tail() {
+        Ok(bytes) => split_records(&bytes, schema.layout).0.len() as u64,
+        Err(_error) => 0,
+    };
+
+    let _ignored = writeln!(out, "\ncontents");
+    let _ignored = writeln!(out, "  frames        {}", frames.len());
+    let _ignored = writeln!(
+        out,
+        "  records       {} closed{}",
+        records,
+        if tail_records > 0 {
+            format!(", {tail_records} in the open tail")
+        } else {
+            String::new()
+        }
+    );
+    let _ignored = writeln!(
+        out,
+        "  raw bytes     {} in frames, {} in the tail",
+        human(bytes_raw),
+        human(tail)
+    );
+    let _ignored = writeln!(
+        out,
+        "  stored        {} ({} of the raw)",
+        human(stored),
+        ratio(bytes_raw, stored)
+    );
+
+    write_frames(&mut out, &frames);
+    write_headers(&mut out, &headers);
+
+    // --- a look at the data -------------------------------------------------
+    let _ignored = writeln!(out, "\nfirst records");
+    let mut shown = 0usize;
+    let code = each_record(&mut container, Some(3), |record| {
+        let cells: Vec<String> = schema
+            .fields
+            .iter()
+            .map(|field| match read_field(record, field) {
+                Some(value) => format!("{}={value}", field.name),
+                None => format!("{}=<short>", field.name),
+            })
+            .collect();
+        shown = shown.saturating_add(1);
+        writeln!(out, "  {}", cells.join("  ")).map_err(std::io::Error::other)
+    });
+    if shown == 0 {
+        let _ignored = writeln!(out, "  (none)");
+    }
+
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    let _ignored = handle.write_all(out.as_bytes());
+    code
 }
 
 fn meta_json(path: &Path) -> i32 {

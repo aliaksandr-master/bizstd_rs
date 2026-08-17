@@ -24,10 +24,11 @@ the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   returns `None` rather than a zero, which is what a file that outlived its
   schema looks like.
 - **`bizstd-cli`, a command-line tool**, installed with
-  `cargo install bizstd-cli`. Five commands: `rebuild`, `verify`, `fix`,
-  `try-json` and `meta-json`. The two JSON commands write nothing but JSON to
-  standard output, and `verify` answers through its exit code — 0 sound, 1
-  problems found, 2 unreadable.
+  `cargo install bizstd-cli`. Seven commands: `inspect`, `rebuild`, `verify`,
+  `fix`, `try-json`, `try-csv` and `meta-json`. The converting commands write
+  nothing but their format to standard output, `inspect` is the one written to
+  be read rather than piped, and `verify` answers through its exit code — 0
+  sound, 1 problems found, 2 unreadable.
 
 ### Changed
 

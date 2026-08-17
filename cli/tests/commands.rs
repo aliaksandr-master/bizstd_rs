@@ -269,6 +269,68 @@ fn rebuild_moves_between_levels_including_none() {
 }
 
 #[test]
+fn try_csv_writes_a_header_row_and_one_row_per_record() {
+    let root = scratch("csv");
+    let path = root.join("csv.bizstd");
+    sample(&path, 2, 15);
+
+    let output = run(&["try-csv", path.to_str().expect("utf-8")]);
+    assert_eq!(output.status.code(), Some(0));
+    let text = String::from_utf8(output.stdout).expect("utf-8");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 31, "a header row and thirty records");
+    assert_eq!(lines.first().copied(), Some("time_nanos,value"));
+    assert_eq!(lines.get(1).copied(), Some("0,100.5"));
+    assert!(output.stderr.is_empty(), "nothing but CSV comes out");
+
+    let bare = run(&["try-csv", path.to_str().expect("utf-8"), "--no-header"]);
+    assert_eq!(String::from_utf8_lossy(&bare.stdout).lines().count(), 30);
+
+    let limited = run(&["try-csv", path.to_str().expect("utf-8"), "--limit", "4"]);
+    assert_eq!(
+        String::from_utf8_lossy(&limited.stdout).lines().count(),
+        5,
+        "the limit counts records, not lines"
+    );
+}
+
+#[test]
+fn inspect_describes_the_file() {
+    let root = scratch("inspect");
+    let path = root.join("inspect.bizstd");
+    sample(&path, 3, 40);
+
+    let output = run(&["inspect", path.to_str().expect("utf-8")]);
+    assert_eq!(output.status.code(), Some(0));
+    let text = String::from_utf8(output.stdout).expect("utf-8");
+
+    for expected in [
+        "version 1",
+        "schema  samples@1",
+        "fixed, 16 B per record",
+        "time_nanos",
+        "frames        3",
+        "records       120",
+        "system headers",
+        "application headers",
+        "stream",
+        "first records",
+    ] {
+        assert!(
+            text.contains(expected),
+            "inspect never mentioned {expected:?}:\n{text}"
+        );
+    }
+    // The frame table carries a checksum per frame, which is the thing worth
+    // seeing when a file is suspected of being damaged.
+    assert_eq!(
+        text.matches("  0            0").count(),
+        1,
+        "the first frame is listed:\n{text}"
+    );
+}
+
+#[test]
 fn a_command_line_that_makes_no_sense_exits_two_and_says_why() {
     assert_eq!(run(&["frobnicate", "x"]).status.code(), Some(2));
     assert_eq!(run(&[]).status.code(), Some(2));
