@@ -34,7 +34,18 @@ fi
 printf 'bizstd-cli %s is not in the registry yet\n' "$version"
 
 step "rehearsal"
-cargo publish --dry-run || die "the registry would reject this"
+# The rehearsal resolves this crate's dependency from the registry, so it cannot
+# run before the library it depends on is there. In a live release that has
+# already happened by now - the library goes first and this script waits for the
+# index. In a dry run it has not, and reporting that as a failure would mean the
+# whole-repository rehearsal could never pass for anything downstream.
+if curl -fsS --max-time 15 "https://crates.io/api/v1/crates/bizstd/$version" \
+     -H "User-Agent: bizstd-release" >/dev/null 2>&1; then
+  cargo publish --dry-run || die "the registry would reject this"
+else
+  printf 'bizstd %s is not in the registry yet, so this cannot be rehearsed;\n' "$version"
+  printf 'in a live run the library is published first and this resolves.\n'
+fi
 
 if [ "$DRY_RUN" = 1 ]; then
   printf 'dry run: bizstd-cli %s was not published\n' "$version"
