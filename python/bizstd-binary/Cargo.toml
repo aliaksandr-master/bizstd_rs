@@ -1,6 +1,6 @@
 [package]
 name = "bizstd-binary"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -16,7 +16,7 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-bizstd = { path = "../../rust", version = "2.0" }
+bizstd = { path = "../../rust", version = "2.1" }
 
 # abi3 from 3.9: one wheel per platform covers every Python from there on,
 # instead of one per platform per minor version. The cost is that the newest

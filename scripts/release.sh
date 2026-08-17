@@ -44,7 +44,7 @@ branch=$(git rev-parse --abbrev-ref HEAD)
 
 # Languages in dependency order. A language joins by having a publish.sh; this
 # list is the only thing that knows the order they must go out in.
-LANGUAGES="rust python nodejs"
+LANGUAGES="rust cli python nodejs"
 present=""
 for language in $LANGUAGES; do
   [ -x "$language/publish.sh" ] && present="$present $language"

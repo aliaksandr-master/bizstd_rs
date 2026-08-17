@@ -239,6 +239,19 @@ pub const EXTENSION: &str = "bizstd";
 pub const HOT_LEVEL: i32 = 3;
 /// The zstd level for offline repacking of cold files.
 pub const COLD_LEVEL: i32 = 19;
+/// No compression at all: frames are stored as the bytes that were appended.
+///
+/// Useful when the data does not compress, when the reader cares about latency
+/// more than about disk, or when something else downstream compresses anyway.
+/// A frame stored this way is recognised on the way back by the absence of the
+/// zstd magic, so a file may hold both kinds and still read correctly.
+///
+/// One thing is given up, and it is worth knowing before choosing this:
+/// [`rebuild_headers`] finds frame boundaries by walking zstd frames, which
+/// announce their own length. Raw frames do not, so a file written at this
+/// level depends on `_frames` for its boundaries and cannot have them
+/// reconstructed from the data if that header is lost.
+pub const NO_COMPRESSION: i32 = 0;
 /// How many records land in `_preview`.
 const PREVIEW_RECORDS: usize = 3;
 /// The `_preview` value budget in bytes.
@@ -740,7 +753,14 @@ pub fn xxh64(data: &[u8]) -> u64 {
 
 /// Compresses one frame with the zstd frame checksum enabled: four bytes of
 /// XXH64 inside the frame, verified by every decoder that reads it.
+///
+/// At [`NO_COMPRESSION`] the bytes are stored as they are. Nothing marks them:
+/// a frame is compressed if it starts with the zstd magic and stored plainly
+/// if it does not, which is what lets one file hold both.
 fn compress_frame(raw: &[u8], level: i32) -> Result<Vec<u8>> {
+    if level == NO_COMPRESSION {
+        return Ok(raw.to_vec());
+    }
     let mut encoder = zstd::stream::Encoder::new(Vec::new(), level).map_err(Error::from)?;
     encoder.include_checksum(true).map_err(Error::from)?;
     encoder.write_all(raw).map_err(Error::from)?;
@@ -905,6 +925,10 @@ impl Container {
         for (key, value) in user {
             headers.set_user(key, value)?;
         }
+        // A new file expects to compress; a frame closed at NO_COMPRESSION and
+        // a repack that drops compression correct this. The flag is
+        // informational either way: a reader decides frame by frame, from the
+        // bytes, which is the only source that cannot be stale.
         let preamble = Preamble { version: VERSION, flags: FLAG_COMPRESSED, header_area };
         let zone = headers.render(header_area as usize)?;
 
@@ -1133,6 +1157,7 @@ impl Container {
         headers.set("_records", &records_closed.to_string())?;
         headers.set("_bytes_raw", &bytes_closed.to_string())?;
         headers.set("_compression_level", &level.to_string())?;
+        headers.set("_compression", if level == NO_COMPRESSION { "none" } else { "zstd" })?;
         let zone = headers.render(self.preamble.header_area as usize)?;
 
         write_journal(&self.path, tail_start, &zone, &compressed)?;
@@ -1753,6 +1778,13 @@ fn decode_frame_at(file: &mut File, offset: u64, available: u64) -> Result<(usiz
 /// A compressor is free to turn a few kilobytes into terabytes, and a reader
 /// that trusts it hands the process to whoever wrote the file.
 fn decode_bounded(compressed: &[u8]) -> Result<Vec<u8>> {
+    // A frame that does not begin with the zstd magic was stored uncompressed.
+    // Deciding by the bytes rather than by a header keeps the two kinds
+    // interchangeable inside one file, and keeps a reader from having to trust
+    // a header that may have been rewritten.
+    if compressed.get(0..4) != Some(ZSTD_MAGIC.as_slice()) {
+        return Ok(compressed.to_vec());
+    }
     let (_consumed, raw) = decode_one_frame(compressed)?;
     Ok(raw)
 }
@@ -1838,7 +1870,14 @@ pub fn repack_with_header_area(path: &Path, level: i32, header_area: u32) -> Res
         name.push(".repack");
         path.with_file_name(name)
     };
-    let preamble = Preamble { version: VERSION, flags: FLAG_COMPRESSED, header_area };
+    // The flag has to follow the level, not the file it came from: leaving it
+    // set on a file that was just rewritten uncompressed makes the preamble
+    // claim something the bytes contradict.
+    let preamble = Preamble {
+        version: VERSION,
+        flags: if level == NO_COMPRESSION { 0 } else { FLAG_COMPRESSED },
+        header_area,
+    };
 
     let result = (|| -> Result<(u64, usize)> {
         let mut out = File::create(&staging).map_err(io_at(&staging))?;
@@ -1871,6 +1910,7 @@ pub fn repack_with_header_area(path: &Path, level: i32, header_area: u32) -> Res
         let mut headers = container.headers.clone();
         headers.set("_frames", &render_frames(&new_frames))?;
         headers.set("_compression_level", &level.to_string())?;
+        headers.set("_compression", if level == NO_COMPRESSION { "none" } else { "zstd" })?;
         let zone = headers.render(header_area as usize)?;
         out.seek(SeekFrom::Start(PREAMBLE_BYTES as u64))
             .map_err(Error::from)?;
@@ -1894,6 +1934,65 @@ pub fn repack_with_header_area(path: &Path, level: i32, header_area: u32) -> Res
             Err(error)
         }
     }
+}
+
+/// One field of one record, decoded according to the schema.
+///
+/// The format stores bytes and a description of them; this is the description
+/// applied. Anything the schema names with a type this does not know comes
+/// back as [`FieldValue::Unknown`] rather than as a guess.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum FieldValue {
+    /// An unsigned integer, whatever its declared width.
+    Unsigned(u64),
+    /// A signed integer.
+    Signed(i64),
+    /// A double.
+    Float(f64),
+    /// Sixteen bytes; `Display` renders them as hex.
+    Uuid([u8; 16]),
+    /// The schema declares a type this build does not decode.
+    Unknown,
+}
+
+impl std::fmt::Display for FieldValue {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unsigned(value) => write!(out, "{value}"),
+            Self::Signed(value) => write!(out, "{value}"),
+            Self::Float(value) => write!(out, "{value}"),
+            Self::Uuid(bytes) => {
+                for byte in bytes {
+                    write!(out, "{byte:02x}")?;
+                }
+                Ok(())
+            }
+            Self::Unknown => write!(out, "?"),
+        }
+    }
+}
+
+/// Reads one field out of one record.
+///
+/// Returns `None` when the record is too short for the field the schema
+/// declares — which is a real thing that happens to a file whose schema was
+/// changed without rewriting the data, and is worth telling apart from a field
+/// that is genuinely zero.
+#[must_use]
+pub fn read_field(record: &[u8], field: &FieldSpec) -> Option<FieldValue> {
+    let offset = field.offset as usize;
+    let take = |width: usize| record.get(offset..offset.checked_add(width)?);
+    Some(match field.ty.as_str() {
+        "u8" => FieldValue::Unsigned(u64::from(*record.get(offset)?)),
+        "u16" => FieldValue::Unsigned(u64::from(u16::from_le_bytes(take(2)?.try_into().ok()?))),
+        "u32" => FieldValue::Unsigned(u64::from(u32::from_le_bytes(take(4)?.try_into().ok()?))),
+        "u64" => FieldValue::Unsigned(u64::from_le_bytes(take(8)?.try_into().ok()?)),
+        "i64" => FieldValue::Signed(i64::from_le_bytes(take(8)?.try_into().ok()?)),
+        "f64" => FieldValue::Float(f64::from_le_bytes(take(8)?.try_into().ok()?)),
+        "uuid" => FieldValue::Uuid(take(16)?.try_into().ok()?),
+        _other => FieldValue::Unknown,
+    })
 }
 
 /// Roughly how many frames a header zone of `header_area` bytes can list.
@@ -1920,7 +2019,11 @@ pub fn max_frames_for(header_area: u32) -> u64 {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, reason = "a failing test reports itself by panicking")]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "a failing test reports itself by panicking, and an index that is wrong is the assertion"
+)]
 mod tests {
     use super::*;
 
@@ -2464,5 +2567,119 @@ mod tests {
         let restored = Container::open_read(&path).unwrap();
         assert_eq!(restored.frames().first().unwrap().hash, frame.hash, "recomputed from the bytes");
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn frames_stored_without_compression_read_back() {
+        let root = scratch_dir("no-compression");
+        let path = root.join("raw.bizstd");
+        let mut file = Container::create(&path, &sample_schema(), "s", "w", 0, DEFAULT_HEADER_AREA, &[]).unwrap();
+        for index in 0..100u64 {
+            file.append_record(&record(index, 1.0, 1.0, 0)).unwrap();
+        }
+        file.seal(0, NO_COMPRESSION).unwrap();
+        let frame = *file.frames().first().unwrap();
+        drop(file);
+
+        // Stored as they were appended: the frame is exactly the records.
+        assert_eq!(frame.len, 100 * 25, "no compression means no change in size");
+        assert_eq!(file_headers(&path)["_compression"], "none");
+
+        let mut back = Container::open_read(&path).unwrap();
+        let raw = back.read_frame_at(0).unwrap();
+        let (records, leftover) = split_records(&raw, RecordLayout::Fixed(25));
+        assert_eq!((records.len(), leftover), (100, 0));
+        assert!(validate(&path, None).unwrap().problems.is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn one_file_may_hold_both_kinds_of_frame() {
+        let root = scratch_dir("mixed");
+        let path = root.join("mixed.bizstd");
+        let mut file = Container::create(&path, &sample_schema(), "s", "w", 0, DEFAULT_HEADER_AREA, &[]).unwrap();
+        for index in 0..40u64 {
+            file.append_record(&record(index, 1.0, 1.0, 0)).unwrap();
+        }
+        file.close_frame(0, NO_COMPRESSION).unwrap();
+        for index in 40..90u64 {
+            file.append_record(&record(index, 1.0, 1.0, 0)).unwrap();
+        }
+        file.seal(1, HOT_LEVEL).unwrap();
+        let frames = file.frames().to_vec();
+        drop(file);
+
+        assert_eq!(frames.first().unwrap().len, 40 * 25, "the first frame is raw");
+        assert!(frames.get(1).unwrap().len < 50 * 25, "the second is compressed");
+
+        // Which kind a frame is comes from its bytes, so both read the same way.
+        let mut back = Container::open_read(&path).unwrap();
+        let mut total = 0;
+        for index in 0..2 {
+            let raw = back.read_frame_at(index).unwrap();
+            total += split_records(&raw, RecordLayout::Fixed(25)).0.len();
+        }
+        assert_eq!(total, 90);
+        assert!(validate(&path, None).unwrap().problems.is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn repacking_can_drop_compression_and_put_it_back() {
+        let root = scratch_dir("repack-levels");
+        let path = root.join("levels.bizstd");
+        let mut file = Container::create(&path, &sample_schema(), "s", "w", 0, DEFAULT_HEADER_AREA, &[]).unwrap();
+        for index in 0..300u64 {
+            file.append_record(&record(index, 1.0, 1.0, 0)).unwrap();
+        }
+        file.seal(0, COLD_LEVEL).unwrap();
+        drop(file);
+        let compressed_size = std::fs::metadata(&path).unwrap().len();
+
+        let report = repack(&path, NO_COMPRESSION).unwrap();
+        assert!(report.bytes_after > compressed_size, "dropping compression grows the file");
+        assert_eq!(file_headers(&path)["_compression"], "none");
+        assert_eq!(peek_headers(&path).unwrap().0.flags, 0, "the preamble stops claiming compression");
+        assert!(validate(&path, None).unwrap().problems.is_empty());
+
+        let report = repack(&path, COLD_LEVEL).unwrap();
+        assert_eq!(report.bytes_after, compressed_size, "and putting it back returns the size");
+        assert_eq!(file_headers(&path)["_compression"], "zstd");
+        assert_eq!(peek_headers(&path).unwrap().0.flags, FLAG_COMPRESSED);
+        assert!(validate(&path, None).unwrap().problems.is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The headers of a file on disk, as a map, for the assertions above.
+    fn file_headers(path: &Path) -> std::collections::HashMap<String, String> {
+        peek_headers(path)
+            .unwrap()
+            .1
+            .pairs()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_field_is_read_by_what_the_schema_says() {
+        let schema = sample_schema();
+        let body = record(1_700_000_000_000_000_000, 101.25, 3.5, 7);
+        let values: Vec<FieldValue> = schema
+            .fields
+            .iter()
+            .map(|field| read_field(&body, field).unwrap())
+            .collect();
+        assert_eq!(values[0], FieldValue::Unsigned(1_700_000_000_000_000_000));
+        assert_eq!(values[1], FieldValue::Float(101.25));
+        assert_eq!(values[2], FieldValue::Float(3.5));
+        assert_eq!(values[3], FieldValue::Unsigned(7));
+
+        // A record shorter than the schema promises says so rather than
+        // guessing, which is what a file outlives its schema looks like.
+        assert_eq!(read_field(&body[..4], schema.fields.get(1).unwrap()), None);
+
+        let unknown = FieldSpec { name: "x".to_owned(), ty: "decimal".to_owned(), offset: 0 };
+        assert_eq!(read_field(&body, &unknown), Some(FieldValue::Unknown));
     }
 }

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "bizstd-binary"
-version = "2.0.0"
+version = "2.1.0"
 description = "Compiled extension for the bizstd container format. Install bizstd instead; this is its binary half."
 readme = "README.md"
 license = "MIT"

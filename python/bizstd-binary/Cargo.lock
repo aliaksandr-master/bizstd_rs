@@ -10,14 +10,14 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "bizstd"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "zstd",
 ]
 
 [[package]]
 name = "bizstd-binary"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "bizstd",
  "pyo3",

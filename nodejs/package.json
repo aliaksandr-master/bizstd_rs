@@ -1,6 +1,6 @@
 {
   "name": "bizstd",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "An append-only container for records that arrive continuously and are read back in bulk.",
   "keywords": [
     "zstd",

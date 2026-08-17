@@ -32,6 +32,7 @@ including the cases where something else wins.
 | Rust | [`bizstd`](https://crates.io/crates/bizstd) | `cargo add bizstd` |
 | Python | [`bizstd`](https://pypi.org/project/bizstd/) (pure) + [`bizstd-binary`](https://pypi.org/project/bizstd-binary/) (compiled) | `pip install bizstd` |
 | Node.js | [`bizstd`](https://www.npmjs.com/package/bizstd) | `npm install bizstd` |
+| Command line | [`bizstd-cli`](https://crates.io/crates/bizstd-cli) | `cargo install bizstd-cli` |
 
 Rust and Python are published. The Node package is built and tested and has not
 been published yet; the table says so rather than pretending.
@@ -46,6 +47,7 @@ has drifted off it.
 
 ```
 rust/         the reference implementation; everything else binds to it
+cli/          the command-line tool
 python/       bizstd and bizstd-binary
 nodejs/       the npm package
 benchmarks/   the measurements behind the claims above

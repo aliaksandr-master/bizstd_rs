@@ -96,7 +96,7 @@ __all__ = [
     "xxh64",
 ]
 
-__version__: Final = "2.0.0"
+__version__: Final = "2.1.0"
 
 StrPath = str | os.PathLike[str]
 

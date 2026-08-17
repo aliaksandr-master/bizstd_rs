@@ -10,14 +10,14 @@ checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
 name = "bizstd"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "zstd",
 ]
 
 [[package]]
 name = "bizstd-node"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "bizstd",
  "napi",
