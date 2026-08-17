@@ -85,24 +85,22 @@ step "credentials"
 [ -x "$VENV/bin/twine" ] || die "twine is missing from $VENV; run 'make dev' in this directory"
 
 # --- the compiled half first ------------------------------------------------
+#
+# `--skip-existing` rather than a check on the version: a version can be present
+# and still be missing most of its wheels, which is exactly what happens when a
+# release is cut from one machine and the matrix build catches up afterwards.
+# Skipping per file lets that second pass add what is missing and leave the rest
+# alone, without anyone having to work out which is which.
 step "bizstd-binary $version"
-if published bizstd-binary "$version"; then
-  printf 'already published, skipping\n'
-else
-  "$VENV/bin/twine" upload "$WHEELS"/*.whl "$WHEELS"/*.tar.gz || die "bizstd-binary upload failed"
-  # The index needs a moment before the next package's dependency resolves.
-  for _attempt in $(seq 1 30); do
-    published bizstd-binary "$version" && break
-    sleep 2
-  done
-fi
+"$VENV/bin/twine" upload --skip-existing "$WHEELS"/*.whl "$WHEELS"/*.tar.gz \
+  || die "bizstd-binary upload failed"
+for _attempt in $(seq 1 30); do
+  published bizstd-binary "$version" && break
+  sleep 2
+done
 
 # --- then the package that depends on it ------------------------------------
 step "bizstd $version"
-if published bizstd "$version"; then
-  printf 'already published, skipping\n'
-else
-  "$VENV/bin/twine" upload bizstd/dist/* || die "bizstd upload failed"
-fi
+"$VENV/bin/twine" upload --skip-existing bizstd/dist/* || die "bizstd upload failed"
 
 printf '\n\033[32mpython: bizstd and bizstd-binary %s published\033[0m\n' "$version"
