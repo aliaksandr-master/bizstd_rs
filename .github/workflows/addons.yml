@@ -54,8 +54,14 @@ jobs:
           node-version: 22
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+
+      # The target has to go on the toolchain that will actually be used, and
+      # that is the one rust-toolchain.toml names, not the one the action just
+      # installed. Adding it above put seven targets on a compiler cargo never
+      # reaches for, and every cross build failed looking for a std it had.
+      - name: add the target to the pinned toolchain
+        shell: bash
+        run: rustup target add ${{ matrix.target }}
 
       - name: install dependencies
         run: npm install

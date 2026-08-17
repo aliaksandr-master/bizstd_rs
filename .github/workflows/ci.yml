@@ -2,10 +2,12 @@
 # Each job runs the same script a developer runs locally, so a green run means
 # what it says.
 #
-# Nothing here publishes. A release is cut from a workstation with
-# `make publish`, by a person who can see what it is about to do; a pipeline
-# that publishes by itself will one day publish a tag somebody pushed to see
-# what would happen.
+# Nothing here publishes, and nothing here rehearses a release either. The
+# rehearsal is `make dev` across every language, which needs uv, npm and a
+# Python interpreter — installing all of them into a job whose purpose is to
+# check the Rust crate buys a slower build and a longer list of things that can
+# break. The release is cut from a workstation with `make publish`, which runs
+# that same `make dev` where the toolchains already are.
 
 name: check
 
@@ -66,11 +68,3 @@ jobs:
       - name: verification loop
         shell: bash
         run: ./check.sh
-
-      # Everything the real release does except the upload. It runs on a tag so
-      # that a broken release is found before anyone reaches for the button.
-      - name: release rehearsal
-        if: startsWith(github.ref, 'refs/tags/v') && matrix.os == 'ubuntu-latest'
-        shell: bash
-        working-directory: .
-        run: scripts/release.sh --dry-run
