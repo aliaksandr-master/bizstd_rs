@@ -7,7 +7,9 @@
 #   make dev FULL=1       the above, widened where a language supports it
 #   make versions         are all the manifests on the same major.minor
 #   make bench            the format comparison behind the README's claims
-#   make publish          release everything on the current version
+#   make tag              annotated tag for the current version
+#   make publish DRY_RUN=1   the whole release except the uploads
+#   make publish          release every language, one command
 #
 # A language is added by creating its directory and giving it a Makefile with a
 # `dev` target. Nothing here needs to change for that.
@@ -22,7 +24,7 @@ PRESENT := $(foreach dir,$(LANGUAGES),$(if $(wildcard $(dir)/Makefile),$(dir),))
 SERIES := $(shell tr -d '[:space:]' < VERSION)
 
 .DEFAULT_GOAL := help
-.PHONY: help dev versions bench publish clean $(PRESENT)
+.PHONY: help dev versions bench tag publish clean $(PRESENT)
 
 help: ## show this help
 	@printf 'bizstd, series %s\n\n' '$(SERIES)'
@@ -42,7 +44,14 @@ versions: ## fail if a manifest is on a different major.minor
 bench: ## measure this format against the alternatives
 	@$(MAKE) --no-print-directory -C benchmarks run
 
-publish: ## release every language at the current version
+tag: ## annotated tag for the version the manifests name
+	@version=$$(sed -n 's/^version = "\(.*\)"/\1/p' rust/Cargo.toml | head -1); \
+	git diff --quiet && git diff --cached --quiet || { echo "working tree is dirty"; exit 1; }; \
+	git rev-parse -q --verify "refs/tags/v$$version" >/dev/null && { echo "tag v$$version already exists"; exit 1; }; \
+	git tag -a "v$$version" -m "bizstd $$version"; \
+	printf 'created v%s - push it with: git push origin v%s\n' "$$version" "$$version"
+
+publish: ## release every language at the current version, in dependency order
 	@scripts/release.sh $(if $(DRY_RUN),--dry-run,)
 
 clean: ## remove build output everywhere
