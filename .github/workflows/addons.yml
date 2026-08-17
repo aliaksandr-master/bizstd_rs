@@ -1,0 +1,105 @@
+# Builds the native addon for every platform the npm package claims to support.
+#
+# The npm equivalent of the wheels workflow, and it exists for the same reason:
+# a package whose binary is built on the maintainer's laptop works on the
+# maintainer's laptop.
+#
+# Nothing here publishes. The addons come out as artefacts and are released
+# from a workstation with `make publish ARTEFACTS=<downloaded>`, by somebody who
+# can see what is about to go out.
+
+name: addons
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'nodejs/**'
+      - 'rust/**'
+      - '.github/workflows/addons.yml'
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: nodejs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: install dependencies
+        run: npm install
+
+      # napi-rs knows how to reach each target: a linker for the cross builds,
+      # the right container for musl. Naming the target is the whole
+      # configuration.
+      - name: build the addon
+        uses: napi-rs/cli-action@v1
+        continue-on-error: false
+        with:
+          working-directory: nodejs
+          target: ${{ matrix.target }}
+          build-args: '--release --platform'
+
+      - name: what was built
+        shell: bash
+        run: ls -la *.node
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: addon-${{ matrix.target }}
+          path: nodejs/*.node
+          if-no-files-found: error
+
+  # Each addon is loaded and used on a machine of its own kind. An addon that
+  # links and does not load is the failure that reaches users, and building
+  # alone would not catch it.
+  smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, artifact: addon-x86_64-unknown-linux-gnu }
+          - { os: macos-latest, artifact: addon-aarch64-apple-darwin }
+          - { os: windows-latest, artifact: addon-x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: nodejs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: nodejs
+      - name: install dependencies
+        run: npm install
+      - name: run the suite against the built addon
+        run: npm test
