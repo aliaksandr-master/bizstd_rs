@@ -19,7 +19,6 @@ DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 
 VENV=.venv
-UV=${UV:-uv}
 # Where the platform wheels are. Locally this holds whatever this machine can
 # build; in a release it is the directory the CI matrix artefacts were
 # downloaded into.
@@ -70,22 +69,27 @@ fi
 
 if [ "$DRY_RUN" = 1 ]; then
   step "rehearsal"
-  "$VENV/bin/python" -m twine check "$WHEELS"/*.whl "$WHEELS"/*.tar.gz bizstd/dist/* 2>/dev/null \
+  "$VENV/bin/twine" check "$WHEELS"/*.whl "$WHEELS"/*.tar.gz bizstd/dist/* 2>/dev/null \
     || printf 'twine not installed, metadata not checked\n'
   printf 'dry run: nothing was uploaded\n'
   exit 0
 fi
 
 step "credentials"
-[ -n "${UV_PUBLISH_TOKEN:-}" ] || [ -f "$HOME/.pypirc" ] \
-  || die "no credentials: export UV_PUBLISH_TOKEN or write ~/.pypirc"
+# twine rather than `uv publish`: twine reads ~/.pypirc itself, so the token
+# never has to be passed on a command line, put in an environment variable, or
+# handled by anything between the file and the upload. `uv publish` wants it as
+# an argument, which is one more place for it to end up in a shell history.
+[ -n "${TWINE_PASSWORD:-}" ] || [ -f "$HOME/.pypirc" ] \
+  || die "no credentials: write ~/.pypirc, or export TWINE_USERNAME=__token__ and TWINE_PASSWORD"
+[ -x "$VENV/bin/twine" ] || die "twine is missing from $VENV; run 'make dev' in this directory"
 
 # --- the compiled half first ------------------------------------------------
 step "bizstd-binary $version"
 if published bizstd-binary "$version"; then
   printf 'already published, skipping\n'
 else
-  $UV publish "$WHEELS"/*.whl "$WHEELS"/*.tar.gz || die "bizstd-binary upload failed"
+  "$VENV/bin/twine" upload "$WHEELS"/*.whl "$WHEELS"/*.tar.gz || die "bizstd-binary upload failed"
   # The index needs a moment before the next package's dependency resolves.
   for _attempt in $(seq 1 30); do
     published bizstd-binary "$version" && break
@@ -98,7 +102,7 @@ step "bizstd $version"
 if published bizstd "$version"; then
   printf 'already published, skipping\n'
 else
-  $UV publish bizstd/dist/* || die "bizstd upload failed"
+  "$VENV/bin/twine" upload bizstd/dist/* || die "bizstd upload failed"
 fi
 
 printf '\n\033[32mpython: bizstd and bizstd-binary %s published\033[0m\n' "$version"

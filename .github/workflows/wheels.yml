@@ -1,0 +1,137 @@
+# Builds the extension wheel for every platform the package claims to support.
+#
+# One wheel per platform, not per platform and Python version: the extension is
+# compiled against abi3 from 3.9, so a single wheel covers every Python from
+# there on. That is the difference between seven wheels and forty.
+#
+# Nothing here uploads. The wheels are left as artefacts and released from a
+# workstation with `make publish WHEELS=<the downloaded directory>`, by a person
+# who can see what is about to go out. A pipeline holding a registry token is a
+# token that leaks eventually; a pipeline holding none cannot.
+
+name: wheels
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'python/**'
+      - 'rust/**'
+      - '.github/workflows/wheels.yml'
+
+jobs:
+  build:
+    name: ${{ matrix.target }} (${{ matrix.libc || matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux, glibc. aarch64 is cross-compiled in the same container the
+          # manylinux tag promises, which is what makes the tag true.
+          - { os: ubuntu-latest, target: x86_64, manylinux: auto, libc: glibc }
+          - { os: ubuntu-latest, target: aarch64, manylinux: auto, libc: glibc }
+          # Linux, musl. Alpine and the containers built on it are common
+          # enough that leaving them to a source build means leaving them out.
+          - { os: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2, libc: musl }
+          - { os: ubuntu-latest, target: aarch64, manylinux: musllinux_1_2, libc: musl }
+          # macOS, both architectures.
+          - { os: macos-latest, target: x86_64 }
+          - { os: macos-latest, target: aarch64 }
+          # Windows.
+          - { os: windows-latest, target: x64 }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: build the wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: python/bizstd-binary
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --out dist
+          sccache: 'true'
+
+      - name: what was built
+        shell: bash
+        run: ls -la python/bizstd-binary/dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.target }}-${{ matrix.libc || matrix.os }}
+          path: python/bizstd-binary/dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    # The fallback for a platform the matrix does not cover. It needs a Rust
+    # toolchain on the user's machine, which is worse than a wheel and far
+    # better than "no matching distribution".
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: python/bizstd-binary
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: python/bizstd-binary/dist/*.tar.gz
+          if-no-files-found: error
+
+  # Every wheel is installed and imported on a machine of its own kind. A wheel
+  # that builds and does not import is the failure this catches, and it is the
+  # one that reaches users.
+  smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, artifact: wheel-x86_64-glibc }
+          - { os: macos-latest, artifact: wheel-aarch64-macos-latest }
+          - { os: windows-latest, artifact: wheel-x64-windows-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install and use it
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install dist/*.whl
+          python -m pip install ./python/bizstd --no-deps
+          python - <<'PY'
+          import tempfile, pathlib, struct
+          import bizstd
+
+          schema = bizstd.Schema(
+              "samples@1",
+              [bizstd.FieldSpec("time_nanos", "u64", 0)],
+              bizstd.RecordLayout.fixed(8),
+          )
+          path = pathlib.Path(tempfile.mkdtemp()) / "smoke.bizstd"
+          with bizstd.create(path, schema, source="ci", writer="ci") as file:
+              for index in range(1000):
+                  file.append(struct.pack("<Q", index))
+              file.seal(0)
+
+          with bizstd.open_read(path) as reader:
+              assert reader.record_count == 1000, reader.record_count
+              assert len(list(reader)) == 1000
+              assert reader.frames[0].hash != 0
+          assert bizstd.validate(path).problems == []
+          print("ok:", bizstd.__version__)
+          PY

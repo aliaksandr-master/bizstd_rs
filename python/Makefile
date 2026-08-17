@@ -20,7 +20,7 @@ venv: $(VENV)/bin/activate
 
 $(VENV)/bin/activate:
 	$(UV) venv $(VENV)
-	$(UV) pip install --python $(PY) -q "maturin>=1.7,<2" mypy pytest ruff hatchling
+	$(UV) pip install --python $(PY) -q "maturin>=1.7,<2" mypy pytest ruff hatchling build twine
 
 build: venv ## compile the extension and install both packages into the venv
 	cd bizstd-binary && ../$(VENV)/bin/maturin develop --release
