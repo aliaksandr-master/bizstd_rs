@@ -31,13 +31,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # `cross` marks the targets this runner cannot link natively. napi
-          # ships prepared sysroots for exactly these, which is cheaper and far
-          # more predictable than assembling a cross toolchain by hand.
+          # `flags` says how a target that this runner cannot link natively is
+          # reached. napi ships prepared sysroots for the glibc targets
+          # (--use-napi-cross) and refuses them for musl, where zig does the
+          # linking instead (-x). The CLI says so itself when given the wrong
+          # one, which is how these two ended up different.
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
-          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, cross: true }
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, cross: true }
-          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, cross: true }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, flags: --use-napi-cross }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, flags: -x }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, flags: -x }
           # The macOS runner is arm64; the other architecture is a normal
           # cross-compile that the linker there already handles.
           - { os: macos-latest, target: x86_64-apple-darwin }
@@ -60,7 +62,7 @@ jobs:
 
       - name: build the addon
         shell: bash
-        run: npx napi build --platform --release --target ${{ matrix.target }} ${{ matrix.cross && '--use-napi-cross' || '' }}
+        run: npx napi build --platform --release --target ${{ matrix.target }} ${{ matrix.flags }}
 
       - name: what was built
         shell: bash
