@@ -1,0 +1,73 @@
+[package]
+name = "bizstd"
+version = "2.0.0"
+edition = "2024"
+# The floor the code actually needs, not the compiler it happens to be
+# developed on. 1.85 is the first release with the 2024 edition this crate is
+# written in; nothing else in it needs anything newer, and `scripts/check.sh`
+# builds and tests against exactly this version so the number stays true.
+# Cargo treats the field as a minimum, and a Rust 2.x would be a different
+# major version by definition - so this reads as ">= 1.85, < 2".
+rust-version = "1.85"
+license = "MIT"
+description = "Blazing-fast Insert ZSTD — an append-only container of independent zstd frames with an editable text header zone and crash-safe frame sealing."
+repository = "https://github.com/aliaksandr-master/bizstd_rs"
+homepage = "https://github.com/aliaksandr-master/bizstd_rs"
+documentation = "https://docs.rs/bizstd"
+readme = "README.md"
+keywords = ["zstd", "compression", "append-only", "container", "file-format"]
+categories = ["compression", "filesystem", "encoding"]
+exclude = [".github/", "scripts/", "Makefile", "clippy.toml", "deny.toml", "rust-toolchain.toml"]
+
+[dependencies]
+# The only dependency, and deliberately so: everything else the container needs
+# is in `std`.
+zstd = "0.13"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# No panics. Every one of these is a way to abort on data we do not control,
+# and a library that aborts on a malformed file is unusable in a service.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+integer_division = "deny"
+unwrap_in_result = "deny"
+
+# Silent overflow is a wrong offset, not a crash: arithmetic states its intent.
+arithmetic_side_effects = "deny"
+
+# Determinism.
+float_cmp = "deny"
+
+# Readability rules we do not want.
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+debug = 1
+strip = false
+overflow-checks = true
+
+[profile.bench]
+inherits = "release"
+debug = 2
+
+# Fast enough to be usable while still catching overflow.
+[profile.dev]
+opt-level = 1
+debug = 2
+overflow-checks = true

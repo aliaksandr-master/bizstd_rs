@@ -1,0 +1,92 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="bizstd — “Blazing-fast Insert ZSTD compressed file format”."><title>bizstd - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="bizstd" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.1 (8bab26f4f 2026-07-14)" data-channel="1.97.1" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../static.files/storage-41dd4d93.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate bizstd</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../bizstd/index.html">bizstd</a><span class="version">2.0.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#concurrency" title="Concurrency">Concurrency</a></li><li><a href="#example" title="Example">Example</a></li></ul><h3><a href="#structs">Crate Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li><li><a href="#constants" title="Constants">Constants</a></li><li><a href="#functions" title="Functions">Functions</a></li><li><a href="#types" title="Type Aliases">Type Aliases</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>bizstd</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/bizstd/lib.rs.html#1-2468">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>bizstd — “Blazing-fast Insert ZSTD compressed file format”.</p>
+<p>A self-describing binary container: a fixed 16-byte preamble, a
+fixed-size text header zone updated in place, and a data section of
+independent zstd frames followed by an uncompressed crash-safe tail.</p>
+<div class="example-wrap"><pre class="language-text"><code>preamble (16 bytes, binary):
+  magic &quot;BIZSTD&quot;   6 bytes
+  version          u8
+  flags            u8      (bit 0: data compressed)
+  header_area_len  u32 LE  (usually 4096)
+  reserved         4 bytes
+
+header zone (ASCII text inside header_area_len bytes):
+  key:value\n      key `_?[a-z0-9][a-z0-9_]*`, split on the FIRST &#39;:&#39;
+  \n               an empty line ends the headers
+  zero padding to the end of the zone
+
+data (at offset 16 + header_area_len):
+  zstd frames of closed hours, then the raw uncompressed tail of the
+  hour being written</code></pre></div>
+<p>System keys start with <code>_</code> and are a closed list owned by this file:
+<code>_schema</code>, <code>_schema_fields</code>, <code>_schema_hash</code>, <code>_record</code>, <code>_source</code>,
+<code>_created_at</code>, <code>_writer</code>, <code>_compression</code>, <code>_compression_level</code>,
+<code>_records</code>, <code>_bytes_raw</code>, <code>_frames</code>, <code>_preview</code>, <code>_sealed</code>. Every one of
+them is a rebuildable cache — the data section is the truth. The
+counters <code>_records</code> and <code>_bytes_raw</code> cover closed frames only; records
+still sitting in the raw tail join them when their frame closes.
+Application keys must NOT start with <code>_</code>; the container never
+interprets them.</p>
+<p>Values escape exactly two characters: <code>\n</code> and <code>\\</code>. Header values built
+by this file contain neither, so their round trip is byte-identical.</p>
+<p>Closing a frame is crash-safe through a redo journal (<code>&lt;file&gt;.seal</code>):
+the compressed frame and the new header zone become durable in the
+journal first, then the raw tail is overwritten in place, the file is
+truncated and the zone rewritten, and only then the journal is removed.
+<a href="struct.Container.html#method.open_append" title="associated function bizstd::Container::open_append"><code>Container::open_append</code></a> replays a complete journal and discards an
+incomplete one, then truncates a torn record off the raw tail — a crash
+at any instant loses at most the buffered records of the current write.</p>
+<p>The crate is deliberately small — <code>std</code> and <code>zstd</code> only, no other
+dependency and nothing to configure — so that reading a container needs
+this crate and nothing else.</p>
+<h2 id="concurrency"><a class="doc-anchor" href="#concurrency">§</a>Concurrency</h2>
+<p><strong>One writer per file, and enforcing that is the caller’s job.</strong> Nothing
+here takes a lock. Two handles opened with <a href="struct.Container.html#method.open_append" title="associated function bizstd::Container::open_append"><code>Container::open_append</code></a> on
+the same path will both recover the tail, both buffer records, and both
+write at offsets the other does not know about; the file that results is
+not one either of them wrote. There is no error for this and no detection —
+only the guarantee that it will not be noticed until the data is read back.</p>
+<p>Readers are unrestricted among themselves: <a href="struct.Container.html#method.open_read" title="associated function bizstd::Container::open_read"><code>Container::open_read</code></a> never
+writes. A reader running alongside a writer is safe in the sense that it
+cannot corrupt anything, but what it sees is a file in motion — the tail
+grows under it, and a frame being closed changes both the data and the
+header zone. Reading a file that is being written to gives a consistent
+answer only for the frames already closed when the read started.</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>bizstd::{Container, DEFAULT_HEADER_AREA, FieldSpec, HOT_LEVEL, RecordLayout, Schema};
+
+<span class="kw">let </span>schema = Schema {
+    name: <span class="string">"samples@1"</span>.to_owned(),
+    fields: <span class="macro">vec!</span>[
+        FieldSpec { name: <span class="string">"time_nanos"</span>.to_owned(), ty: <span class="string">"u64"</span>.to_owned(), offset: <span class="number">0 </span>},
+        FieldSpec { name: <span class="string">"value"</span>.to_owned(), ty: <span class="string">"f64"</span>.to_owned(), offset: <span class="number">8 </span>},
+    ],
+    layout: RecordLayout::Fixed(<span class="number">16</span>),
+};
+
+<span class="kw">let </span><span class="kw-2">mut </span>file = Container::create(
+    <span class="string">"samples.bizstd"</span>.as_ref(),
+    <span class="kw-2">&amp;</span>schema,
+    <span class="string">"example"</span>,
+    <span class="string">"example writer"</span>,
+    <span class="number">0</span>,
+    DEFAULT_HEADER_AREA,
+    <span class="kw-2">&amp;</span>[(<span class="string">"stream"</span>, <span class="string">"alpha"</span>)],
+)<span class="question-mark">?</span>;
+
+<span class="kw">let </span><span class="kw-2">mut </span>record = [<span class="number">0u8</span>; <span class="number">16</span>];
+record[..<span class="number">8</span>].copy_from_slice(<span class="kw-2">&amp;</span><span class="number">1_u64</span>.to_le_bytes());
+record[<span class="number">8</span>..].copy_from_slice(<span class="kw-2">&amp;</span><span class="number">2.5_f64</span>.to_le_bytes());
+file.append_record(<span class="kw-2">&amp;</span>record)<span class="question-mark">?</span>;
+file.seal(<span class="number">0</span>, HOT_LEVEL)<span class="question-mark">?</span>;</code></pre></div></div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.Container.html" title="struct bizstd::Container">Container</a></dt><dd>A <code>.bizstd</code> file, open for reading or appending.</dd><dt><a class="struct" href="struct.FieldSpec.html" title="struct bizstd::FieldSpec">Field<wbr>Spec</a></dt><dd>One field of a record, for <code>_schema_fields</code>.</dd><dt><a class="struct" href="struct.Frame.html" title="struct bizstd::Frame">Frame</a></dt><dd>One closed zstd frame in the data section.</dd><dt><a class="struct" href="struct.Headers.html" title="struct bizstd::Headers">Headers</a></dt><dd>The ordered key:value pairs of the header zone.</dd><dt><a class="struct" href="struct.Preamble.html" title="struct bizstd::Preamble">Preamble</a></dt><dd>The 16-byte binary preamble.</dd><dt><a class="struct" href="struct.RebuildReport.html" title="struct bizstd::RebuildReport">Rebuild<wbr>Report</a></dt><dd>What <a href="fn.rebuild_headers.html" title="fn bizstd::rebuild_headers"><code>rebuild_headers</code></a> found and did.</dd><dt><a class="struct" href="struct.RepackReport.html" title="struct bizstd::RepackReport">Repack<wbr>Report</a></dt><dd>What <a href="fn.repack.html" title="fn bizstd::repack"><code>repack</code></a> measured.</dd><dt><a class="struct" href="struct.Schema.html" title="struct bizstd::Schema">Schema</a></dt><dd>What the records are: a name, the fields, and the boundary rule.</dd><dt><a class="struct" href="struct.ValidateReport.html" title="struct bizstd::ValidateReport">Validate<wbr>Report</a></dt><dd>What <a href="fn.validate.html" title="fn bizstd::validate"><code>validate</code></a> found.</dd></dl><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><dl class="item-table"><dt><a class="enum" href="enum.Error.html" title="enum bizstd::Error">Error</a></dt><dd>Everything this crate can fail with.</dd><dt><a class="enum" href="enum.RecordLayout.html" title="enum bizstd::RecordLayout">Record<wbr>Layout</a></dt><dd>How record boundaries are found in the raw byte stream.</dd></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.COLD_LEVEL.html" title="constant bizstd::COLD_LEVEL">COLD_<wbr>LEVEL</a></dt><dd>The zstd level for offline repacking of cold files.</dd><dt><a class="constant" href="constant.DEFAULT_HEADER_AREA.html" title="constant bizstd::DEFAULT_HEADER_AREA">DEFAULT_<wbr>HEADER_<wbr>AREA</a></dt><dd>The default header zone size.</dd><dt><a class="constant" href="constant.EXTENSION.html" title="constant bizstd::EXTENSION">EXTENSION</a></dt><dd>The file extension, without the dot.</dd><dt><a class="constant" href="constant.FLAG_COMPRESSED.html" title="constant bizstd::FLAG_COMPRESSED">FLAG_<wbr>COMPRESSED</a></dt><dd>Preamble flag bit 0: the data section carries zstd frames.</dd><dt><a class="constant" href="constant.HOT_LEVEL.html" title="constant bizstd::HOT_LEVEL">HOT_<wbr>LEVEL</a></dt><dd>The zstd level for closing frames on the hot path.</dd><dt><a class="constant" href="constant.MAGIC.html" title="constant bizstd::MAGIC">MAGIC</a></dt><dd>The preamble magic, exactly six bytes.</dd><dt><a class="constant" href="constant.MAX_FRAME_RAW_BYTES.html" title="constant bizstd::MAX_FRAME_RAW_BYTES">MAX_<wbr>FRAME_<wbr>RAW_<wbr>BYTES</a></dt><dd>The largest raw size one frame may decompress to. Without a ceiling a
+hostile file compresses a few kilobytes into a demand for all the memory
+there is.</dd><dt><a class="constant" href="constant.MAX_HEADER_AREA.html" title="constant bizstd::MAX_HEADER_AREA">MAX_<wbr>HEADER_<wbr>AREA</a></dt><dd>The largest header zone a file may declare. A <code>u32</code> read straight from a
+20-byte file would otherwise ask the allocator for 4 GiB, and an allocation
+that cannot be served aborts the process rather than returning an error.</dd><dt><a class="constant" href="constant.PREAMBLE_BYTES.html" title="constant bizstd::PREAMBLE_BYTES">PREAMBLE_<wbr>BYTES</a></dt><dd>The preamble’s fixed size.</dd><dt><a class="constant" href="constant.VERSION.html" title="constant bizstd::VERSION">VERSION</a></dt><dd>The container version this file writes.</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.escape_value.html" title="fn bizstd::escape_value">escape_<wbr>value</a></dt><dd>Escapes the two characters a value may not carry raw: <code>\n</code> and <code>\</code>.</dd><dt><a class="fn" href="fn.fnv1a64.html" title="fn bizstd::fnv1a64">fnv1a64</a></dt><dd>FNV-1a 64 — the schema fingerprint. A fingerprint, not a signature.</dd><dt><a class="fn" href="fn.key_is_valid.html" title="fn bizstd::key_is_valid">key_<wbr>is_<wbr>valid</a></dt><dd>Whether the text is a legal header key: <code>_?[a-z0-9][a-z0-9_]*</code>.</dd><dt><a class="fn" href="fn.max_frames_for.html" title="fn bizstd::max_frames_for">max_<wbr>frames_<wbr>for</a></dt><dd>Roughly how many frames a header zone of <code>header_area</code> bytes can list.</dd><dt><a class="fn" href="fn.parse_frames.html" title="fn bizstd::parse_frames">parse_<wbr>frames</a></dt><dd>Parses <code>_frames</code>. The fourth field, the frame checksum, is optional:
+files written before it existed carry triples.</dd><dt><a class="fn" href="fn.peek_headers.html" title="fn bizstd::peek_headers">peek_<wbr>headers</a></dt><dd>Reads just the preamble and header zone — the cheap peek the catalogue
+does per file, one bounded read, never touching the data section.</dd><dt><a class="fn" href="fn.rebuild_headers.html" title="fn bizstd::rebuild_headers">rebuild_<wbr>headers</a></dt><dd>Rescans the data section by walking zstd frames, recomputes <code>_frames</code>,
+<code>_records</code> and <code>_bytes_raw</code>, and rewrites the zone when <code>fix</code> is set.</dd><dt><a class="fn" href="fn.render_frames.html" title="fn bizstd::render_frames">render_<wbr>frames</a></dt><dd>Renders <code>_frames</code>: <code>id,offset,len,xxh64;...</code> (hash in hex; the fourth
+field is omitted while unrecorded, so an index written before checksums
+existed round-trips byte-for-byte).</dd><dt><a class="fn" href="fn.repack.html" title="fn bizstd::repack">repack</a></dt><dd>Re-encodes every closed frame at <code>level</code>, transactionally per file.</dd><dt><a class="fn" href="fn.repack_with_header_area.html" title="fn bizstd::repack_with_header_area">repack_<wbr>with_<wbr>header_<wbr>area</a></dt><dd>Re-encodes every closed frame at <code>level</code> and gives the rebuilt file a
+header zone of <code>header_area</code> bytes.</dd><dt><a class="fn" href="fn.rfc3339_utc.html" title="fn bizstd::rfc3339_utc">rfc3339_<wbr>utc</a></dt><dd>RFC 3339 UTC from epoch milliseconds — civil-from-days, Hinnant.</dd><dt><a class="fn" href="fn.split_records.html" title="fn bizstd::split_records">split_<wbr>records</a></dt><dd>Splits raw bytes into records; the second value is the torn leftover.</dd><dt><a class="fn" href="fn.unescape_value.html" title="fn bizstd::unescape_value">unescape_<wbr>value</a></dt><dd>Reverses <a href="fn.escape_value.html" title="fn bizstd::escape_value"><code>escape_value</code></a>.</dd><dt><a class="fn" href="fn.validate.html" title="fn bizstd::validate">validate</a></dt><dd>Checks a file: headers, schema hash, frame decode, record boundaries,
+counters. <code>check</code> receives every record and returns a problem or <code>None</code>;
+pass <code>None</code> to skip content checks. At most 20 problems are collected.</dd><dt><a class="fn" href="fn.xxh64.html" title="fn bizstd::xxh64">xxh64</a></dt><dd>XXH64 of <code>data</code> with seed 0 — the per-frame checksum.</dd></dl><h2 id="types" class="section-header">Type Aliases<a href="#types" class="anchor">§</a></h2><dl class="item-table"><dt><a class="type" href="type.Result.html" title="type bizstd::Result">Result</a></dt><dd>The result type every fallible function in this crate returns.</dd></dl></section></div></main></body></html>

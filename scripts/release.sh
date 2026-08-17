@@ -1,18 +1,29 @@
 #!/usr/bin/env bash
-# release.sh — publish the version that Cargo.toml already names.
+# release.sh — one command that releases everything in this repository.
 #
-#   scripts/release.sh --dry-run   print the plan, rehearse the upload, send nothing
+#   scripts/release.sh --dry-run   the whole thing except the uploads
 #   scripts/release.sh             do it
 #
-# The version is never passed in on the command line. It lives in Cargo.toml,
-# it is reviewed like any other change, and the tag has to agree with it — a
-# release invoked with a version typed at the prompt is a release nobody
-# reviewed.
+# Or, from the root: `make publish` and `make publish DRY_RUN=1`.
+#
+# The version is never passed in on the command line. It lives in the
+# manifests, it is reviewed like any other change, and the tag has to agree
+# with it — a release invoked with a version typed at the prompt is a release
+# nobody reviewed.
+#
+# Every package here shares a major and minor version, so they go out together.
+# The order is the dependency order and is not adjustable: the crate is what
+# the bindings build against, and inside Python the compiled package precedes
+# the one that depends on it. Publishing in any other order opens a window
+# where the registry holds a package whose dependency is not there yet.
 #
 # Publishing is irreversible. A version can be yanked, which stops new
-# dependants from picking it up, but the files stay in the registry forever.
-# That is why every guard below refuses rather than warns.
-set -euo pipefail
+# dependants from resolving to it, but the files stay in the registry. That is
+# why every guard below refuses rather than warns, and why each language's
+# publish step skips what is already there instead of failing — a release that
+# cannot be re-run after a partial failure is a release that leaves the
+# registry half-updated with no way forward.
+set -uo pipefail
 cd "$(dirname "$0")/.."
 
 DRY_RUN=0
@@ -25,16 +36,26 @@ esac
 step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 die() { printf '\033[31m%s\033[0m\n' "$1" >&2; exit 1; }
 
-version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-[ -n "$version" ] || die "no version in Cargo.toml"
+series=$(tr -d '[:space:]' < VERSION)
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' rust/Cargo.toml | head -1)
+[ -n "$version" ] || die "no version in rust/Cargo.toml"
 tag="v$version"
 branch=$(git rev-parse --abbrev-ref HEAD)
 
+# Languages in dependency order. A language joins by having a publish.sh; this
+# list is the only thing that knows the order they must go out in.
+LANGUAGES="rust python nodejs"
+present=""
+for language in $LANGUAGES; do
+  [ -x "$language/publish.sh" ] && present="$present $language"
+done
+
 step "plan"
+printf 'series    %s\n' "$series"
 printf 'version   %s\n' "$version"
 printf 'tag       %s\n' "$tag"
 printf 'branch    %s\n' "$branch"
-printf 'registry  %s\n' "${CARGO_REGISTRY:-crates.io}"
+printf 'languages %s\n' "${present:-none with a publish.sh}"
 printf 'mode      %s\n' "$([ "$DRY_RUN" = 1 ] && echo 'dry run — nothing is sent' || echo 'live')"
 
 step "guards"
@@ -43,7 +64,7 @@ git diff --quiet && git diff --cached --quiet \
   || die "the working tree is dirty; commit or stash first"
 
 [ -z "$(git status --porcelain --untracked-files=normal)" ] \
-  || die "untracked files present; they would not be in the archive but they are in your head"
+  || die "untracked files present; they would not be in any archive but they are in your head"
 
 # In CI the checkout is detached at the tag, which is the same thing as
 # "released from the tag" and is checked below; elsewhere the branch must be
@@ -59,7 +80,7 @@ head=$(git rev-parse HEAD)
 [ "$tagged" = "$head" ] || [ "$DRY_RUN" = 1 ] \
   || die "tag $tag points at $tagged, HEAD is $head"
 
-# A tag that exists only on this machine publishes something nobody can check
+# A tag that exists only on this machine releases something nobody can check
 # out afterwards. In CI the tag is by definition on the remote already, and
 # `ls-remote` there would need credentials the job has no reason to hold.
 if [ -z "${CI:-}" ]; then
@@ -72,24 +93,29 @@ fi
 
 printf 'every guard passed\n'
 
-step "verification"
-scripts/check.sh
+step "versions"
+scripts/versions.sh || die "the manifests disagree about the version"
 
-step "rehearsal"
-# --dry-run assembles and uploads nothing, but it does everything else the real
-# publish does, including refusing on a manifest the registry would reject.
-cargo publish --dry-run
+step "verification"
+# The whole repository's checks, not this language's: a release that ships one
+# package while another is broken is a release that has to be followed by an
+# apology.
+make dev || die "make dev failed"
+
+for language in $present; do
+  step "$language"
+  if [ "$DRY_RUN" = 1 ]; then
+    "$language/publish.sh" --dry-run || die "$language: the rehearsal failed"
+  else
+    "$language/publish.sh" || die "$language: publishing failed. Fix it and re-run;
+  everything already published will be skipped."
+  fi
+done
 
 if [ "$DRY_RUN" = 1 ]; then
-  printf '\n\033[32mdry run finished — %s was not published\033[0m\n' "$version"
+  printf '\n\033[32mdry run finished — %s was not published anywhere\033[0m\n' "$version"
   exit 0
 fi
 
-step "publish"
-[ -n "${CARGO_REGISTRY_TOKEN:-}" ] || [ -f "${CARGO_HOME:-$HOME/.cargo}/credentials.toml" ] \
-  || die "no registry credentials: export CARGO_REGISTRY_TOKEN or run 'cargo login'"
-
-cargo publish
-
-printf '\n\033[32mbizstd %s published\033[0m\n' "$version"
-printf 'next: bump the version in Cargo.toml and open the CHANGELOG section for the one after it\n'
+printf '\n\033[32mbizstd %s published:%s\033[0m\n' "$version" "$present"
+printf 'next: bump VERSION and every manifest together, and open the CHANGELOG section for what comes after\n'

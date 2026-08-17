@@ -1,0 +1,50 @@
+# Tooling configuration shared by both packages. Neither package ships this
+# file; it exists so that mypy, ruff and pytest see one set of rules instead of
+# two that drift.
+
+[tool.mypy]
+# The packages support 3.9; this checker no longer does. Checking against 3.10
+# still catches everything that matters here, and the `from __future__ import
+# annotations` at the top of every module is what keeps 3.9 working - the
+# syntax that would break there is exactly what that import defers.
+python_version = "3.10"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+disallow_any_explicit = false
+files = ["bizstd/src", "bizstd-binary/python", "tests"]
+mypy_path = "bizstd-binary/python"
+
+[[tool.mypy.overrides]]
+# The extension is described by its stubs; there is no source to follow into.
+module = "bizstd_binary._native"
+ignore_missing_imports = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+src = ["bizstd/src", "bizstd-binary/python", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "RET", "SIM", "PTH", "RUF", "ANN", "D"]
+ignore = [
+    # D203/D213 contradict the blank-line style used throughout.
+    "D203", "D213",
+    # "First line should be in imperative mood." A property that returns the
+    # frame's hash is described by "XXH64 of the compressed bytes", not by
+    # "Return the XXH64 ..." - the rule fits functions and fights properties.
+    "D401",
+    # Docstrings on __repr__ and __enter__ say what the language already says.
+    "D105",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests document themselves by their names, and the assertions are the point.
+"tests/*" = ["D103", "S101"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
