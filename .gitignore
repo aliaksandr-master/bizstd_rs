@@ -17,3 +17,11 @@ __pycache__/
 
 .DS_Store
 *.token
+/python/.venv/
+/python/**/dist/
+/python/**/target/
+
+# built by `maturin develop` into the source tree
+/python/**/*.so
+/python/**/*.pyd
+/python/**/*.dylib

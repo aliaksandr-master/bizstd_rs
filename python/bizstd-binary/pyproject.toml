@@ -1,0 +1,35 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "bizstd-binary"
+version = "2.0.0"
+description = "Compiled extension for the bizstd container format. Install bizstd instead; this is its binary half."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [{ name = "Aliaksandr Master", email = "alxe.master@gmail.com" }]
+keywords = ["zstd", "compression", "append-only", "container", "file-format"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: System :: Archiving :: Compression",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/aliaksandr-master/bizstd_rs"
+Source = "https://github.com/aliaksandr-master/bizstd_rs"
+Changelog = "https://github.com/aliaksandr-master/bizstd_rs/blob/main/CHANGELOG.md"
+
+[tool.maturin]
+# A mixed layout: the extension is `bizstd_binary._native` and the package
+# around it is real Python. That package is what carries `py.typed` and the
+# stubs, which a bare extension module has nowhere to put.
+python-source = "python"
+module-name = "bizstd_binary._native"
+features = ["pyo3/extension-module"]
