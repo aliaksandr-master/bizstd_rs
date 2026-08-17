@@ -1,5 +1,8 @@
-# build output, per language
+# build output, per language. A directory added without a line here is how 376
+# files of compiler cache ended up in the history: the list is per language on
+# purpose, and adding a language means adding to it.
 /rust/target/
+/cli/target/
 /benchmarks/target/
 /python/**/target/
 /python/**/dist/
